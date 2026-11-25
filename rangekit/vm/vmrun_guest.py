@@ -169,7 +169,8 @@ class Guest:
             raise VMError(f"runProgramInGuest 失敗 (exit {code}): {out} {err}")
         return code, out, err
 
-    def _write_local_cmd(self, content):
+    @staticmethod
+    def _write_local_cmd(content):
         fd, path = tempfile.mkstemp(suffix=".cmd")
         os.close(fd)
         with open(path, "w", newline="\r\n", encoding="ascii", errors="replace") as fh:
