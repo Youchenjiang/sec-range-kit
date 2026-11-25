@@ -34,7 +34,7 @@ jobs:
           pip install flake8
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
       - name: Code Quality (Lint)
-        run: python -m flake8 --exclude=.git,__pycache__,tools,tests
+        run: python -m flake8 --exclude=.git,__pycache__,tools,tests,skills
       - name: Run Tests
         run: if [ -d tests ]; then python -m unittest discover -s tests; fi
       # /* CI_STEPS_PLACEHOLDER_END */

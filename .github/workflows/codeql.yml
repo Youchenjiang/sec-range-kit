@@ -59,6 +59,10 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           queries: security-extended
+          # skills/ holds third-party skill content imported verbatim; it is not this repo's code.
+          config: |
+            paths-ignore:
+              - skills/**
 
       - name: Perform CodeQL Analysis
         # 若專案中未包含該特定語言檔案，continue-on-error 確保流程不因此中斷
