@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Git commit-msg hook enforcing Conventional Commits and subject format
+
+COMMIT_MSG_FILE="$1"
+# Strip trailing carriage returns (\r) to guarantee compatibility across Windows CRLF and Linux LF
+FIRST_LINE=$(head -n 1 "$COMMIT_MSG_FILE" | tr -d '\r')
+
+# Allow merge commits, reverts, or git internal fixup commits
+if [[ "$FIRST_LINE" =~ ^(Merge|Revert|fixup!|squash!) ]]; then
+  exit 0
+fi
+
+# Allowed types and scopes
+TYPES="feat|fix|refactor|docs|test|chore|style|perf|security"
+PATTERN="^($TYPES)(\([a-zA-Z0-9_-]+\))?: [a-zA-Z0-9].*$"
+
+if ! [[ "$FIRST_LINE" =~ $PATTERN ]]; then
+  echo -e "\033[31m[ERROR] Invalid commit header format!\033[0m"
+  echo "Expected format: <type>(<scope>): <subject> or <type>: <subject>"
+  echo "Allowed types: feat, fix, refactor, docs, test, chore, style, perf, security"
+  echo "Actual commit header: '$FIRST_LINE'"
+  exit 1
+fi
+
+if [[ "$FIRST_LINE" =~ \.$ ]]; then
+  echo -e "\033[31m[ERROR] Commit header must not end with a trailing period ('.').\033[0m"
+  echo "Actual commit header: '$FIRST_LINE'"
+  exit 1
+fi
+
+if [ ${#FIRST_LINE} -gt 72 ]; then
+  echo -e "\033[31m[ERROR] Commit header is too long (${#FIRST_LINE} chars). Maximum is 72 chars.\033[0m"
+  echo "Actual commit header: '$FIRST_LINE'"
+  exit 1
+fi
+
+# NCUIM-inspired Commit Body Validation:
+# Strip comments (lines starting with #) and check if body contains a numbered list starting with "1. " or "1) "
+BODY=$(grep -v '^#' "$COMMIT_MSG_FILE" | tr -d '\r' | tail -n +2)
+
+# Check if non-empty body exists and contains numbered list (e.g. 1. or 1) )
+if ! echo "$BODY" | grep -Eq '^[[:space:]]*1[.)][[:space:]]+'; then
+  echo -e "\033[31m[ERROR] Commit body must contain a numbered list starting with '1. ' or '1) '!\033[0m"
+  echo "Example:"
+  echo "  1. Explain what changed and the technical rationale."
+  echo "  2. Additional details if needed."
+  exit 1
+fi
+
+exit 0

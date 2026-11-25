@@ -1,0 +1,144 @@
+#!/bin/sh
+# Git pre-push hook for PR preflight and governance.
+# Installed into .git/hooks/pre-push or scripts/hooks/pre-push.
+
+set -e
+
+echo "[pre-push] Checking latest remote main, branch ancestry and commit policy..."
+if [ "$#" -ge 2 ]; then
+  push_updates=$(cat)
+else
+  push_updates=""
+fi
+push_args=""
+initial_push_flag=""
+if [ -n "$push_updates" ]; then
+  branch_count=0
+  tag_count=0
+  tag_list=""
+  while read -r local_ref local_oid remote_ref remote_oid; do
+    if [ -z "$local_oid" ] || [ -z "$remote_ref" ] || [ -z "$remote_oid" ]; then
+      echo "[pre-push] ERROR: incomplete pushed ref update." >&2
+      exit 1
+    fi
+    if [ "$local_ref" != "$remote_ref" ]; then
+      echo "[pre-push] ERROR: pushed destination must match source ref: $local_ref -> $remote_ref" >&2
+      exit 1
+    fi
+    case "$local_ref" in
+      refs/tags/*)
+        if [ "$local_oid" = "0000000000000000000000000000000000000000" ]; then
+          echo "[pre-push] ERROR: tag deletion requires a separate release operation." >&2
+          exit 1
+        fi
+        tag_count=$((tag_count + 1))
+        tag_list="$tag_list $local_ref"
+        ;;
+      refs/heads/*)
+        case "$remote_ref" in
+          refs/heads/main|refs/heads/master)
+            is_direct_push=$(git config --bool --get repo.directPush 2>/dev/null || echo "false")
+            if [ "$is_direct_push" != "true" ] && [ "${ALLOW_DIRECT_PUSH:-false}" != "true" ]; then
+              echo "[pre-push] ERROR: pushing directly to main/master is prohibited." >&2
+              exit 1
+            fi
+            ;;
+        esac
+        if [ "$local_oid" = "0000000000000000000000000000000000000000" ]; then
+          echo "[pre-push] ERROR: branch deletion requires separate authorization." >&2
+          exit 1
+        fi
+        branch_count=$((branch_count + 1))
+        push_args="$local_ref $local_oid"
+        if [ "$remote_oid" = "0000000000000000000000000000000000000000" ]; then
+          initial_push_flag="--initial-push"
+        fi
+        ;;
+      *) echo "[pre-push] ERROR: unsupported pushed ref: $local_ref" >&2; exit 1 ;;
+    esac
+  done <<EOF
+$push_updates
+EOF
+  if [ "$branch_count" -gt 0 ] && [ "$tag_count" -gt 0 ]; then
+    echo "[pre-push] ERROR: push tags and development branches in separate operations." >&2
+    exit 1
+  fi
+  if [ "$branch_count" -eq 0 ]; then
+    echo "[pre-push] Tag-only push: PR checks are inapplicable; release/tag authorization and gates are handled separately."
+    RELEASE_CHECKER=""
+    if [ -f "tools/release_checker.py" ]; then
+      RELEASE_CHECKER="tools/release_checker.py"
+    elif [ -f "scripts/release_checker.py" ]; then
+      RELEASE_CHECKER="scripts/release_checker.py"
+    fi
+
+    if [ -n "$RELEASE_CHECKER" ]; then
+      echo "[pre-push] Running release verification for pushed tags..."
+      for tag in $tag_list; do
+        python "$RELEASE_CHECKER" --tag "$tag"
+      done
+    fi
+    exit 0
+  fi
+  if [ "$branch_count" -ne 1 ]; then
+    echo "[pre-push] ERROR: push one development branch at a time." >&2
+    exit 1
+  fi
+elif [ "$#" -ge 2 ]; then
+  echo "[pre-push] ERROR: Git provided no pushed ref updates; cannot verify destination." >&2
+  exit 1
+fi
+
+# Step 1: PR Preflight check (if in PR workflow)
+is_direct_push=$(git config --bool --get repo.directPush 2>/dev/null || echo "false")
+if [ "$is_direct_push" != "true" ] && [ "${ALLOW_DIRECT_PUSH:-false}" != "true" ]; then
+  BODY_FILE="${PR_BODY_FILE:-${CLICKRA_PR_BODY_FILE:-}}"
+  if [ -z "$BODY_FILE" ]; then
+    echo "[pre-push] ERROR: set PR_BODY_FILE (or CLICKRA_PR_BODY_FILE) to the finalized PR body draft path." >&2
+    exit 1
+  fi
+
+  PREFLIGHT_SCRIPT=""
+  if [ -f "tools/pr_preflight.py" ]; then
+    PREFLIGHT_SCRIPT="tools/pr_preflight.py"
+  elif [ -f "scripts/pr_preflight.py" ]; then
+    PREFLIGHT_SCRIPT="scripts/pr_preflight.py"
+  fi
+
+  if [ -n "$PREFLIGHT_SCRIPT" ]; then
+    if [ -n "$push_args" ]; then
+      set -- $push_args
+      python "$PREFLIGHT_SCRIPT" --check --body-file "$BODY_FILE" --push-ref "$1" --push-oid "$2" $initial_push_flag
+    else
+      python "$PREFLIGHT_SCRIPT" --check --body-file "$BODY_FILE"
+    fi
+  fi
+else
+  echo "[pre-push] Direct trunk push mode: skipping PR body preflight check."
+fi
+
+# Step 2: Conventional Commits check
+LINT_SCRIPT=""
+if [ -f "tools/lint_commits.py" ]; then
+  LINT_SCRIPT="tools/lint_commits.py"
+elif [ -f "scripts/lint_commits.py" ]; then
+  LINT_SCRIPT="scripts/lint_commits.py"
+fi
+if [ -n "$LINT_SCRIPT" ]; then
+  echo "[pre-push] Linting commits..."
+  python "$LINT_SCRIPT"
+fi
+
+# Step 3: Project test and build verification (from tools/project.json)
+BUILD_RUNNER=""
+if [ -f "tools/build_runner.py" ]; then
+  BUILD_RUNNER="tools/build_runner.py"
+elif [ -f "scripts/build_runner.py" ]; then
+  BUILD_RUNNER="scripts/build_runner.py"
+fi
+if [ -n "$BUILD_RUNNER" ]; then
+  echo "[pre-push] Running project tests and build verification..."
+  python "$BUILD_RUNNER"
+fi
+
+echo "[pre-push] All pre-push checks passed."

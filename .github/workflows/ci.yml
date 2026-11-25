@@ -1,0 +1,40 @@
+# ==============================================================================
+# 🚀 Continuous Integration (CI) Pipeline
+#
+# Automatically tailored to the project archetype by init-project.ps1 based on
+# build commands (lint / test / build) in presets.json and tools/project.json.
+# ==============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: Continuous Integration
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # /* CI_STEPS_PLACEHOLDER_START */
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          pip install flake8
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      - name: Code Quality (Lint)
+        run: python -m flake8 --exclude=.git,__pycache__,tools,tests
+      - name: Run Tests
+        run: if [ -d tests ]; then python -m unittest discover -s tests; fi
+      # /* CI_STEPS_PLACEHOLDER_END */
