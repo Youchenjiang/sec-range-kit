@@ -23,7 +23,7 @@ def make_venv(root: Path, name: str, script: str) -> Path:
         binary_dir.mkdir(parents=True, exist_ok=True)
         (binary_dir / "python").touch()
         (binary_dir / f"{script}").touch()
-        (binary_dir / f"python.exe").touch()
+        (binary_dir / "python.exe").touch()
         (binary_dir / f"{script}.exe").touch()
     return venv
 
@@ -124,9 +124,11 @@ class CollabMcpTests(unittest.TestCase):
                 "docs": "servers/ghost.md",
                 "runner": {"venv": "rangekit/mcp/.verify/ghost", "script": "ghost", "args": []},
             }
-            with patch.object(collab_mcp.protocol, "REPO_ROOT", root):
-                with self.assertRaises(ValueError) as ctx:
-                    collab_mcp.resolve_runner(entry)
+            with (
+                patch.object(collab_mcp.protocol, "REPO_ROOT", root),
+                self.assertRaises(ValueError) as ctx,
+            ):
+                collab_mcp.resolve_runner(entry)
         self.assertIn("runtime not provisioned", str(ctx.exception))
         self.assertIn("servers/ghost.md", str(ctx.exception))
 
@@ -140,9 +142,11 @@ class CollabMcpTests(unittest.TestCase):
                 "name": "half",
                 "runner": {"venv": "rangekit/mcp/.verify/half", "script": "half", "args": []},
             }
-            with patch.object(collab_mcp.protocol, "REPO_ROOT", root):
-                with self.assertRaises(ValueError) as ctx:
-                    collab_mcp.resolve_runner(entry)
+            with (
+                patch.object(collab_mcp.protocol, "REPO_ROOT", root),
+                self.assertRaises(ValueError) as ctx,
+            ):
+                collab_mcp.resolve_runner(entry)
         self.assertIn("not found under", str(ctx.exception))
 
     def test_resolve_runner_requires_runner_block(self) -> None:
@@ -223,9 +227,11 @@ class CollabMcpTests(unittest.TestCase):
     def test_run_session_rejects_missing_probe(self) -> None:
         registry = {"servers": []}
         missing = protocol.REPO_ROOT / "rangekit" / "mcp" / "tools" / "definitely-missing.py"
-        with patch.object(collab_mcp, "PROBE_PATH", missing):
-            with self.assertRaises(ValueError) as ctx:
-                collab_mcp.run_session(registry, "anything")
+        with (
+            patch.object(collab_mcp, "PROBE_PATH", missing),
+            self.assertRaises(ValueError) as ctx,
+        ):
+            collab_mcp.run_session(registry, "anything")
         self.assertIn("probe missing", str(ctx.exception))
 
 
@@ -344,10 +350,12 @@ class McpAuthorizationGateTests(unittest.TestCase):
 
     def test_enforce_gate_raises_on_denial(self) -> None:
         registry = gate_registry()
-        with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(collab_mcp, "GATE_LOG_PATH", Path(tmp) / "gate.jsonl"):
-                with self.assertRaises(ValueError) as ctx:
-                    collab_mcp.enforce_gate(registry, "danger", "run_command", {})
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(collab_mcp, "GATE_LOG_PATH", Path(tmp) / "gate.jsonl"),
+            self.assertRaises(ValueError) as ctx,
+        ):
+            collab_mcp.enforce_gate(registry, "danger", "run_command", {})
         self.assertIn("authorization gate denied", str(ctx.exception))
 
     def test_record_gate_decision_appends_an_audit_line(self) -> None:
@@ -374,40 +382,46 @@ class McpAuthorizationGateTests(unittest.TestCase):
 
     def test_command_gate_returns_zero_on_allow_and_two_on_deny(self) -> None:
         registry = gate_registry([ALLOW_ENTRY])
-        with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(collab_mcp, "load_registry", return_value=registry), patch.object(
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(collab_mcp, "load_registry", return_value=registry),
+            patch.object(
                 collab_mcp, "GATE_LOG_PATH", Path(tmp) / "gate.jsonl"
-            ):
-                buffer = io.StringIO()
-                with contextlib.redirect_stdout(buffer):
-                    allowed = collab_mcp.command_gate(
-                        argparse.Namespace(
-                            server="reader", tool="lookup", args="", authorized=""
-                        )
+            ),
+        ):
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                allowed = collab_mcp.command_gate(
+                    argparse.Namespace(
+                        server="reader", tool="lookup", args="", authorized=""
                     )
-                self.assertEqual(allowed, 0)
-                self.assertIn('"decision": "allow"', buffer.getvalue())
+                )
+            self.assertEqual(allowed, 0)
+            self.assertIn('"decision": "allow"', buffer.getvalue())
 
-                buffer = io.StringIO()
-                with contextlib.redirect_stdout(buffer):
-                    denied = collab_mcp.command_gate(
-                        argparse.Namespace(
-                            server="danger", tool="run_command", args="", authorized=""
-                        )
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                denied = collab_mcp.command_gate(
+                    argparse.Namespace(
+                        server="danger", tool="run_command", args="", authorized=""
                     )
-                self.assertEqual(denied, 2)
-                self.assertIn('"decision": "deny"', buffer.getvalue())
+                )
+            self.assertEqual(denied, 2)
+            self.assertIn('"decision": "deny"', buffer.getvalue())
 
     def test_command_gate_reports_unknown_server_as_denied(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(collab_mcp, "load_registry", return_value=gate_registry()), patch.object(
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(collab_mcp, "load_registry", return_value=gate_registry()),
+            patch.object(
                 collab_mcp, "GATE_LOG_PATH", Path(tmp) / "gate.jsonl"
-            ):
-                buffer = io.StringIO()
-                with contextlib.redirect_stdout(buffer):
-                    code = collab_mcp.command_gate(
-                        argparse.Namespace(server="ghost", tool="x", args="", authorized="")
-                    )
+            ),
+        ):
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                code = collab_mcp.command_gate(
+                    argparse.Namespace(server="ghost", tool="x", args="", authorized="")
+                )
         self.assertEqual(code, 2)
         self.assertIn("unknown MCP server", buffer.getvalue())
 
@@ -516,17 +530,15 @@ class McpSecretsTests(unittest.TestCase):
                     }
                 ]
             }
-            with patch.object(collab_mcp.protocol, "REPO_ROOT", root), patch.object(
-                collab_mcp, "PROBE_PATH", probe
-            ), patch.object(
-                collab_mcp, "ENV_FILE_PATH", root / ".env"
-            ), patch.object(
-                collab_mcp, "GATE_LOG_PATH", root / "gate.jsonl"
-            ), patch.dict(
-                os.environ, {"HITCON_MCP_TEST_TOKEN_ABSENT": ""}, clear=False
+            with (
+                patch.object(collab_mcp.protocol, "REPO_ROOT", root),
+                patch.object(collab_mcp, "PROBE_PATH", probe),
+                patch.object(collab_mcp, "ENV_FILE_PATH", root / ".env"),
+                patch.object(collab_mcp, "GATE_LOG_PATH", root / "gate.jsonl"),
+                patch.dict(os.environ, {"HITCON_MCP_TEST_TOKEN_ABSENT": ""}, clear=False),
+                self.assertRaises(ValueError) as ctx,
             ):
-                with self.assertRaises(ValueError) as ctx:
-                    collab_mcp.run_session(registry, "gated")
+                collab_mcp.run_session(registry, "gated")
         message = str(ctx.exception)
         self.assertIn("missing required secret env names", message)
         self.assertIn("HITCON_MCP_TEST_TOKEN_ABSENT", message)

@@ -196,7 +196,8 @@ class ProbePythonTests(unittest.TestCase):
 
 
 class SshPlanTests(unittest.TestCase):
-    def plan(self, entry: dict | None = None):
+    @staticmethod
+    def plan(entry: dict | None = None):
         return mcp_transports.plan_launch(
             entry or ssh_entry(),
             transport="ssh",
@@ -252,7 +253,7 @@ class SshPlanTests(unittest.TestCase):
         plan = self.plan(entry)
         script = shlex.split(plan["args"][-1])[2]
         proc = subprocess.run(
-            ["sh", "-c", script], capture_output=True, text=True, timeout=30
+            ["sh", "-c", script], capture_output=True, text=True, timeout=30, check=False
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         # ``two words`` stays one argument and ``$b`` is not expanded.
@@ -324,7 +325,8 @@ class SshPlanTests(unittest.TestCase):
 
 
 class ContainerPlanTests(unittest.TestCase):
-    def plan(self, entry: dict | None = None):
+    @staticmethod
+    def plan(entry: dict | None = None):
         return mcp_transports.plan_launch(
             entry or container_entry(),
             transport="container",
@@ -385,7 +387,8 @@ class ContainerPlanTests(unittest.TestCase):
 
 
 class VmrunPlanTests(unittest.TestCase):
-    def plan(self, entry: dict):
+    @staticmethod
+    def plan(entry: dict):
         return mcp_transports.plan_launch(
             entry,
             transport="vmrun_guest",
@@ -395,7 +398,8 @@ class VmrunPlanTests(unittest.TestCase):
             vmrun_bridge=VMRUN_BRIDGE,
         )
 
-    def entry(self, **vmrun_overrides) -> dict:
+    @staticmethod
+    def entry(**vmrun_overrides) -> dict:
         vmrun = {"vmx": {"secret": "FLARE_VMX"}}
         vmrun.update(vmrun_overrides)
         return {
@@ -616,7 +620,7 @@ class VmrunBridgeRoundTripTests(unittest.TestCase):
                 ),
                 capture_output=True,
                 text=True,
-                timeout=90,
+                timeout=90, check=False
             )
             self.assertEqual(proc.returncode, 0, proc.stderr)
             messages = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
@@ -658,7 +662,7 @@ class VmrunBridgeRoundTripTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
                 env=env,
-                timeout=60,
+                timeout=60, check=False
             )
             self.assertEqual(proc.returncode, 2)
             self.assertIn("guest credentials missing", proc.stderr)
@@ -689,7 +693,8 @@ class VmrunBridgeRoundTripTests(unittest.TestCase):
 
 
 class CollabIntegrationTests(unittest.TestCase):
-    def _registry(self, probe_rel: str, entry: dict) -> dict:
+    @staticmethod
+    def _registry(probe_rel: str, entry: dict) -> dict:
         return {
             "version": 1,
             "policy": {"node_transports": {"probe_env": probe_rel}},
@@ -706,12 +711,14 @@ class CollabIntegrationTests(unittest.TestCase):
             # Node addressing comes from .env; the test points that lookup at
             # a file that does not exist and supplies the values through the process
             # environment, so it behaves the same on a clone and in CI.
-            with patch.dict(os.environ, {"KALI_HOST": "10.0.0.5", "KALI_USER": "analyst"}):
-                with patch.object(collab_mcp, "ENV_FILE_PATH", root / "no-.env"):
-                    with patch.object(collab_mcp.protocol, "REPO_ROOT", root):
-                        plan = collab_mcp.resolve_session_plan(
-                            entry, self._registry(policy_rel, entry)
-                        )
+            with (
+                patch.dict(os.environ, {"KALI_HOST": "10.0.0.5", "KALI_USER": "analyst"}),
+                patch.object(collab_mcp, "ENV_FILE_PATH", root / "no-.env"),
+                patch.object(collab_mcp.protocol, "REPO_ROOT", root),
+            ):
+                plan = collab_mcp.resolve_session_plan(
+                    entry, self._registry(policy_rel, entry)
+                )
             self.assertEqual(plan["transport"], "ssh")
             self.assertEqual(plan["holder"], "kali")
             self.assertIn("probe-env", plan["probe_python"])
@@ -725,11 +732,13 @@ class CollabIntegrationTests(unittest.TestCase):
             entry = ssh_entry()
             entry["secrets_binding"] = {"required": True, "env": ["SEMGREP_APP_TOKEN"]}
             registry = self._registry(policy_rel, entry)
-            with patch.dict(os.environ, {"KALI_HOST": "10.0.0.5", "KALI_USER": "analyst"}):
-                with patch.object(collab_mcp, "ENV_FILE_PATH", root / "no-.env"):
-                    with patch.object(collab_mcp.protocol, "REPO_ROOT", root):
-                        with self.assertRaises(ValueError) as ctx:
-                            collab_mcp.run_session(registry, "kali-scanner")
+            with (
+                patch.dict(os.environ, {"KALI_HOST": "10.0.0.5", "KALI_USER": "analyst"}),
+                patch.object(collab_mcp, "ENV_FILE_PATH", root / "no-.env"),
+                patch.object(collab_mcp.protocol, "REPO_ROOT", root),
+                self.assertRaises(ValueError) as ctx,
+            ):
+                collab_mcp.run_session(registry, "kali-scanner")
             message = str(ctx.exception)
             self.assertIn("cannot reach a ssh node", message)
             self.assertIn("SEMGREP_APP_TOKEN", message)
@@ -743,11 +752,13 @@ class CollabIntegrationTests(unittest.TestCase):
             "runner": {"venv": "rangekit/mcp/.verify/never-installed", "script": "server", "args": ["-t", "stdio"]},
         }
         registry = {"version": 1, "policy": {}, "authorization": {}, "servers": [entry]}
-        with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(collab_mcp.protocol, "REPO_ROOT", Path(tmp)):
-                with self.assertRaises(ValueError):
-                    collab_mcp.resolve_session_plan(entry, registry)
-                plan = collab_mcp.resolve_session_plan(entry, registry, execute=False)
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(collab_mcp.protocol, "REPO_ROOT", Path(tmp)),
+        ):
+            with self.assertRaises(ValueError):
+                collab_mcp.resolve_session_plan(entry, registry)
+            plan = collab_mcp.resolve_session_plan(entry, registry, execute=False)
         self.assertEqual(plan["transport"], "stdio_local")
         self.assertIn("never-installed", plan["command"])
         self.assertIn("never-installed", plan["probe_python"])

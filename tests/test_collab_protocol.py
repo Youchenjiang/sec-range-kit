@@ -23,7 +23,8 @@ TASK_BODY = """# TASK: test
 
 
 class CollabProtocolTests(unittest.TestCase):
-    def build_case(self, root: Path, case_id: str = "C01_Test") -> Path:
+    @staticmethod
+    def build_case(root: Path, case_id: str = "C01_Test") -> Path:
         case = root / case_id
         (case / "tasks").mkdir(parents=True)
         (case / "findings").mkdir()
@@ -110,14 +111,16 @@ class CollabProtocolTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            with patch.object(protocol, "REPO_ROOT", root):
-                with self.assertRaisesRegex(
+            with (
+                patch.object(protocol, "REPO_ROOT", root),
+                self.assertRaisesRegex(
                     ValueError,
                     "missing Protocol Contract|missing canonical DISPATCHED anchor",
-                ):
-                    protocol.discover_assigned_tasks(
-                        cases, "Session-A", events_dir=root / "events"
-                    )
+                ),
+            ):
+                protocol.discover_assigned_tasks(
+                    cases, "Session-A", events_dir=root / "events"
+                )
 
     def test_unversioned_anchored_task_is_allowed_as_legacy(self):
         with tempfile.TemporaryDirectory() as tmp:

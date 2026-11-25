@@ -41,12 +41,14 @@ class CollabRaceTests(unittest.TestCase):
             p.stop()
         self.tmp.cleanup()
 
-    def open_race(self):
+    @staticmethod
+    def open_race():
         return collab_race.command_open(argparse.Namespace(
             case="C01_Test", lead_session="Session-Lead", budget_minutes=30, target_ready_ratio=0.8
         ))
 
-    def lane(self, task_id="T001", lane_id="L01", assignee="Session-A", questions="Q01,Q02"):
+    @staticmethod
+    def lane(task_id="T001", lane_id="L01", assignee="Session-A", questions="Q01,Q02"):
         return collab_race.command_lane(argparse.Namespace(
             case="C01_Test", lead_session="Session-Lead", lane_id=lane_id,
             task_id=task_id, task_type="TRIAGE", target_role="ROLE_01_TRIAGE_HUNTER",
@@ -55,7 +57,8 @@ class CollabRaceTests(unittest.TestCase):
             context="fixture", skills="triage",
         ))
 
-    def answer(self, task_id, session, question, answer, evidence, **kw):
+    @staticmethod
+    def answer(task_id, session, question, answer, evidence, **kw):
         args = dict(
             case="C01_Test", task_id=task_id, session=session, question=question,
             answer=answer, confidence="high", evidence=evidence, state="auto",
@@ -65,7 +68,8 @@ class CollabRaceTests(unittest.TestCase):
         args.update(kw)
         return collab_race.command_answer(argparse.Namespace(**args))
 
-    def secret_answer(self, task_id, session, question, evidence, **kw):
+    @staticmethod
+    def secret_answer(task_id, session, question, evidence, **kw):
         args = dict(
             case="C01_Test", task_id=task_id, session=session, question=question,
             answer="", confidence="high", evidence=evidence, state="auto",
@@ -263,10 +267,10 @@ class CollabRaceTests(unittest.TestCase):
         ]
         self.assertEqual(len(assist_events), 1)
         self.assertEqual(assist_events[0]["data"]["task_id"], "T001")
-        answer_event = next(
+        answer_event = next(((
             payload for _, payload in collab_race.iter_race_events("C01_Test")
             if payload["kind"] == "ANSWER_READY"
-        )
+        )), None)
         self.assertEqual(
             answer_event["data"]["assist_event_id"],
             assist_events[0]["event_id"],

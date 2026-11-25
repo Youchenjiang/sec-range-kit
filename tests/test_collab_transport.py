@@ -75,7 +75,8 @@ class _TransportHarness:
 
 
 class HandoffTransportTests(unittest.TestCase):
-    def _with_patches(self, root, func):
+    @staticmethod
+    def _with_patches(root, func):
         harness = _TransportHarness(root)
         with contextlib.ExitStack() as stack:
             for patcher in harness.patches():
@@ -197,7 +198,7 @@ class HandoffTransportTests(unittest.TestCase):
                 )
                 self.assertEqual(recovered, 1)
                 self.assertTrue(handoff.exists())
-                payload = next(protocol.iter_handoffs("Session-Worker"))[1]
+                payload = next(protocol.iter_handoffs("Session-Worker"), None)[1]
                 self.assertFalse(
                     any("init-output" in command for command in payload["required_commands"])
                 )
@@ -342,18 +343,20 @@ class HandoffTransportTests(unittest.TestCase):
                     transport="file",
                     lead_session="Session-Lead",
                 )
-                payload = next(
+                payload = next(((
                     payload
                     for handoff_path, payload in protocol.iter_handoffs("Session-Reviewer")
                     if handoff_path == path
-                )
+                )), None)
                 self.assertIn("review ready", payload["required_commands"][-1])
                 self.assertNotIn("finding ready", payload["required_commands"][-1])
 
     def test_iter_handoffs_empty_returns_nothing(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(protocol, "INBOX_DIR", Path(tmp) / "inbox"):
-                self.assertEqual(list(protocol.iter_handoffs("Session-None")), [])
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(protocol, "INBOX_DIR", Path(tmp) / "inbox"),
+        ):
+            self.assertEqual(list(protocol.iter_handoffs("Session-None")), [])
 
 
 class SyncArtifactTests(unittest.TestCase):
@@ -424,7 +427,7 @@ class SyncArtifactTests(unittest.TestCase):
                     task_path=task,
                 )
                 target_dir = protocol.event_dir("C01_Test", "T001")
-                original = next(target_dir.glob("*.json"))
+                original = next(target_dir.glob("*.json"), None)
                 (target_dir / "DISPATCHED (conflicted copy).json").write_text(
                     original.read_text(encoding="utf-8"), encoding="utf-8"
                 )

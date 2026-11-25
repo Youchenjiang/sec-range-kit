@@ -71,7 +71,7 @@ def _resolve_program(program: str) -> str:
     return sys.executable
 
 
-def main(argv: list[str]) -> int:
+def main(argv: list[str]) -> int:  # skipcq: PY-R1000 - fake vmrun dispatches every verb
     if not argv or argv[0] != "-T":
         print("fake vmrun: expected -T <product>", file=sys.stderr)
         return 1

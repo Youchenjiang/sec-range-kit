@@ -26,7 +26,8 @@ TASK_BODY = """# TASK: test
 
 
 class CollabBusTests(unittest.TestCase):
-    def build_case(self, root: Path) -> tuple[Path, Path]:
+    @staticmethod
+    def build_case(root: Path) -> tuple[Path, Path]:
         cases = root / "cases"
         case = cases / "C01_Test"
         for child in ("tasks", "findings", "reviews"):
@@ -45,9 +46,11 @@ class CollabBusTests(unittest.TestCase):
             args = argparse.Namespace(
                 case="C01_Test", task_id="T001", session="Session-Intruder", message=""
             )
-            with patch.object(protocol, "CASES_DIR", cases):
-                with self.assertRaisesRegex(ValueError, "不是 task assignee"):
-                    collab_bus.emit_worker_event(args, "ACK")
+            with (
+                patch.object(protocol, "CASES_DIR", cases),
+                self.assertRaisesRegex(ValueError, "不是 task assignee"),
+            ):
+                collab_bus.emit_worker_event(args, "ACK")
 
     def test_done_requires_output(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -62,9 +65,9 @@ class CollabBusTests(unittest.TestCase):
             with (
                 patch.object(protocol, "CASES_DIR", cases),
                 patch.object(protocol, "events_for_task", return_value=lifecycle),
+                self.assertRaisesRegex(ValueError, "governed output 必須存在"),
             ):
-                with self.assertRaisesRegex(ValueError, "governed output 必須存在"):
-                    collab_bus.emit_worker_event(args, "DONE")
+                collab_bus.emit_worker_event(args, "DONE")
 
     def test_done_rejects_incomplete_output_contract(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -89,9 +92,9 @@ class CollabBusTests(unittest.TestCase):
             with (
                 patch.object(protocol, "CASES_DIR", cases),
                 patch.object(protocol, "events_for_task", return_value=lifecycle),
+                self.assertRaisesRegex(ValueError, "output contract 未通過"),
             ):
-                with self.assertRaisesRegex(ValueError, "output contract 未通過"):
-                    collab_bus.emit_worker_event(args, "DONE")
+                collab_bus.emit_worker_event(args, "DONE")
 
     def test_start_requires_ack(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -102,9 +105,9 @@ class CollabBusTests(unittest.TestCase):
             with (
                 patch.object(protocol, "CASES_DIR", cases),
                 patch.object(protocol, "events_for_task", return_value=[]),
+                self.assertRaisesRegex(ValueError, "START 前.*ACK"),
             ):
-                with self.assertRaisesRegex(ValueError, "START 前.*ACK"):
-                    collab_bus.emit_worker_event(args, "START")
+                collab_bus.emit_worker_event(args, "START")
 
     def test_done_requires_start(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -116,9 +119,9 @@ class CollabBusTests(unittest.TestCase):
             with (
                 patch.object(protocol, "CASES_DIR", cases),
                 patch.object(protocol, "events_for_task", return_value=lifecycle),
+                self.assertRaisesRegex(ValueError, "DONE 前.*START"),
             ):
-                with self.assertRaisesRegex(ValueError, "DONE 前.*START"):
-                    collab_bus.emit_worker_event(args, "DONE")
+                collab_bus.emit_worker_event(args, "DONE")
 
     def test_done_is_terminal_and_rejects_replay(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -158,16 +161,20 @@ class CollabBusTests(unittest.TestCase):
                 kind="NOTE",
                 message="hello",
             )
-            with patch.object(protocol, "CASES_DIR", cases):
-                with self.assertRaisesRegex(ValueError, "只能在 Case Lead"):
-                    collab_bus.command_send(args)
+            with (
+                patch.object(protocol, "CASES_DIR", cases),
+                self.assertRaisesRegex(ValueError, "只能在 Case Lead"),
+            ):
+                collab_bus.command_send(args)
 
     def test_non_lead_cannot_create_task(self):
         with tempfile.TemporaryDirectory() as tmp:
             cases, _ = self.build_case(Path(tmp))
-            with patch.object(protocol, "CASES_DIR", cases):
-                with self.assertRaisesRegex(ValueError, "不是 C01_Test 的 Case Lead"):
-                    collab_bus.ensure_actor_is_case_lead("C01_Test", "Session-Intruder")
+            with (
+                patch.object(protocol, "CASES_DIR", cases),
+                self.assertRaisesRegex(ValueError, "不是 C01_Test 的 Case Lead"),
+            ):
+                collab_bus.ensure_actor_is_case_lead("C01_Test", "Session-Intruder")
 
     def test_status_accepts_anchored_legacy_task(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -402,9 +409,11 @@ class CollabBusTests(unittest.TestCase):
                 context="Synthetic review test only.",
                 skills="independent review",
             )
-            with patch.object(protocol, "CASES_DIR", cases):
-                with self.assertRaisesRegex(ValueError, "review-target-finding"):
-                    collab_bus.command_new_task(args)
+            with (
+                patch.object(protocol, "CASES_DIR", cases),
+                self.assertRaisesRegex(ValueError, "review-target-finding"),
+            ):
+                collab_bus.command_new_task(args)
 
     def test_new_review_rejects_terminal_target_hash_drift(self):
         with tempfile.TemporaryDirectory() as tmp:
