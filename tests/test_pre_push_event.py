@@ -30,7 +30,9 @@ class EventBranchPushTests(unittest.TestCase):
         self.work = self.tmp / "work"
         self.work.mkdir()
         git(self.work, "init")
-        shutil.copy2(HOOK, self.work / ".git" / "hooks" / "pre-push")
+        hook = self.work / ".git" / "hooks" / "pre-push"
+        shutil.copy2(HOOK, hook)
+        hook.chmod(0o755)  # git skips a non-executable hook on POSIX
         (self.work / "tools").mkdir()
         shutil.copy2(LINT, self.work / "tools" / "lint_commits.py")
         git(self.work, "remote", "add", "origin", str(remote))
