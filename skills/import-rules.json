@@ -1,0 +1,106 @@
+{
+  "version": 1,
+  "description": "Declarative, re-runnable import rules for skills/. `python tools/skill_import.py` materialises these rules into skills/ and rewrites SOURCES.json + INDEX.md; `--check` re-derives the same selection from the pinned upstream commit, re-hashes every imported file and fails when anything drifted. Edit this file (not SOURCES.json) when importing, re-pinning, normalising or dropping a source.",
+  "snapshot_base": "auto",
+  "snapshot_base_note": "A relative `snapshot` path is tried against the workspace root, the repository's parent and the repository itself (first existing wins) so the rules survive being cloned next to Security-LabData; pin it with --snapshot-root when the layout differs.",
+  "sources": [
+    {
+      "id": "ctf-skills",
+      "label": "ctf-skills",
+      "snapshot": "Security-LabData/external-skills/ctf-skills",
+      "commit": "c332c7be1b27cb64639a20124ac55ba916adef92",
+      "license": "MIT",
+      "license_file": {
+        "path": "LICENSE",
+        "sha256": "25fb2cfc684b4f1e510e8ecf2deeeedfe9ee80ebae4c41b806baa439857a394b"
+      },
+      "selection": "every top-level directory of the snapshot that ships a SKILL.md (11 of them), copied verbatim",
+      "select": {
+        "kind": "entry_dirs",
+        "entry": "SKILL.md"
+      },
+      "normalize": {
+        "entry_name": "SKILL.md"
+      }
+    },
+    {
+      "id": "awesome-dfir-skills",
+      "label": "awesome-dfir-skills",
+      "snapshot": "Security-LabData/external-skills/awesome-dfir-skills",
+      "commit": "6e52942c6273a760296c38ca6ce950bbed4dfbdf",
+      "license": "Apache-2.0",
+      "license_file": {
+        "path": "LICENSE",
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+      },
+      "selection": "explicit allowlist of 8 upstream skill directories under skills/<category>/; the entry file is renamed to SKILL.md and its frontmatter normalised (comment lines dropped, name/description unquoted, name set to the local directory name)",
+      "select": {
+        "kind": "explicit",
+        "entry": "skill.md",
+        "map": {
+          "admiralty-system": "skills/analysis/admiralty-system-tr",
+          "analysing-attack": "skills/analysis/analysing-attack-skill",
+          "malware-analysis": "skills/analysis/malware-analysis-tr",
+          "threat-actor-profiling": "skills/analysis/threat-actor-profiling",
+          "windows-intrusion-timeline": "skills/analysis/windows-intrusion-timeline",
+          "osquery-query-helper": "skills/hunting/osquery-helper",
+          "suspicious-powershell-hunt": "skills/hunting/suspicious-powershell-hunt",
+          "initial-incident-intake": "skills/triage/initial-incident-intake"
+        }
+      },
+      "normalize": {
+        "entry_name": "SKILL.md",
+        "frontmatter": {
+          "strip_comments": true,
+          "unquote": ["name", "description"],
+          "set_name": true
+        }
+      }
+    },
+    {
+      "id": "anthropic-cybersecurity-skills",
+      "label": "Anthropic Cybersecurity Skills",
+      "snapshot": "Security-LabData/external-skills/Anthropic-Cybersecurity-Skills",
+      "commit": "54a798831d2266a3ca61ce68a7acb80b81160d57",
+      "license": "Apache-2.0",
+      "license_per_skill": true,
+      "license_file": {
+        "path": "LICENSE",
+        "sha256": "a941b58ef0ba43a31e24ae7ece1b743a585efed9e37792b9ca063e0798be1cbe"
+      },
+      "selection": "SKILL.md frontmatter: subdomain in {digital-forensics, threat-hunting, incident-response} OR tags include memory-forensics (132 of 818 upstream skills)",
+      "select": {
+        "kind": "frontmatter",
+        "root": "skills",
+        "entry": "SKILL.md",
+        "expect_universe": 818,
+        "where": {
+          "any": [
+            {
+              "key": "subdomain",
+              "in": ["digital-forensics", "threat-hunting", "incident-response"]
+            },
+            {
+              "key": "tags",
+              "contains_any": ["memory-forensics"]
+            }
+          ]
+        }
+      },
+      "normalize": {
+        "entry_name": "SKILL.md"
+      }
+    },
+    {
+      "id": "hitcon-range-sprint",
+      "label": "framework internal",
+      "snapshot": "(in-repo)",
+      "commit": "",
+      "license": "Not specified (internal work product)",
+      "select": {
+        "kind": "in_repo",
+        "skills": ["hitcon-dfir-vm-ops"]
+      }
+    }
+  ]
+}
