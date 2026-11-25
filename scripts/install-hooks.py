@@ -8,7 +8,6 @@ Cross-platform pure standard library implementation (0 external dependencies).
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import sys
@@ -69,7 +68,8 @@ def install_hooks() -> int:
                     target.chmod(target.stat().st_mode | 0o755)
                 except OSError:
                     pass
-                print(f"[hooks] Installed hook: {target.relative_to(repo_root) if target.is_relative_to(repo_root) else target}")
+                shown = target.relative_to(repo_root) if target.is_relative_to(repo_root) else target
+                print(f"[hooks] Installed hook: {shown}")
                 installed += 1
 
     # Optional: configure git commit template if .gitmessage.txt is present
