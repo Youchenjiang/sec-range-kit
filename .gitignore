@@ -104,3 +104,8 @@ Thumbs.db
 tmp/
 temp/
 scratch/
+
+# Collab bus: runtime state and event cases are local event data, never committed.
+/.collab/runtime/
+/.collab/cases/*
+!/.collab/cases/C00_Template/

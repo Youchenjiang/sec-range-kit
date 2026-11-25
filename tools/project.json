@@ -37,6 +37,7 @@
   },
   "hygiene": {
     "allowedRootDirs": [
+      ".collab",
       "rangekit"
     ]
   }
