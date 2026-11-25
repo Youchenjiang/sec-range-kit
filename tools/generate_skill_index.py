@@ -56,6 +56,18 @@ def _display(path: Path) -> str:
         return str(path)
 
 
+def _block_scalar(lines: list[str], start: int, end: int, style: str) -> tuple[str, int]:
+    """Collect the indented lines of a ``>``/``|`` block scalar starting at ``start``."""
+    block: list[str] = []
+    i = start
+    while i < end and (not lines[i].strip() or lines[i][:1] in " \t"):
+        if lines[i].strip():
+            block.append(lines[i].strip())
+        i += 1
+    joined = " ".join(block) if style.startswith(">") else "\n".join(block)
+    return joined, i
+
+
 def parse_frontmatter(path: Path) -> dict[str, str]:
     """Extract top-level ``key: value`` pairs from a SKILL.md frontmatter block.
 
@@ -87,14 +99,7 @@ def parse_frontmatter(path: Path) -> dict[str, str]:
 
         key, value = match.group(1), match.group(2).strip()
         if value[:1] in (">", "|"):  # block scalar: collect indented lines
-            block: list[str] = []
-            i += 1
-            while i < end and (not lines[i].strip() or lines[i][:1] in " \t"):
-                if lines[i].strip():
-                    block.append(lines[i].strip())
-                i += 1
-            joined = " ".join(block) if value.startswith(">") else "\n".join(block)
-            data[key] = joined
+            data[key], i = _block_scalar(lines, i + 1, end, value)
             continue
 
         data[key] = value.strip('"').strip("'")

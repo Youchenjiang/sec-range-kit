@@ -195,6 +195,32 @@ def split_frontmatter(text: str) -> tuple[list[str], int]:
     return [], -1
 
 
+def _frontmatter_list_item(data: dict[str, object], key: str | None, body: str) -> bool:
+    """Append a ``- item`` line to ``key``'s list; True when the line was such an item."""
+    if not body.lstrip().startswith("- ") or key is None:
+        return False
+    # YAML block lists may be indented or flush left; both mean "an item".
+    value = data.setdefault(key, [])
+    if isinstance(value, list):
+        value.append(body.lstrip()[2:].strip().strip("\"'"))
+    return True
+
+
+def _frontmatter_key(data: dict[str, object], key: str | None, body: str) -> str | None:
+    """Record a top-level ``key: value`` line; returns the key now in effect."""
+    if body[:1] in " \t" and key is not None:  # continuation of the previous key
+        return key
+    match = re.match(r"^([A-Za-z0-9_-]+):(.*)$", body)
+    if not match:
+        return key
+    key, value = match.group(1), match.group(2).strip()
+    if value:
+        data[key] = value.strip("\"'")
+    else:
+        data.setdefault(key, [])
+    return key
+
+
 def parse_frontmatter(text: str) -> dict[str, object]:
     """Top-level scalars (unquoted) plus ``key:`` blocks of ``- item`` lists."""
     block, _ = split_frontmatter(text)
@@ -204,23 +230,27 @@ def parse_frontmatter(text: str) -> dict[str, object]:
         body = line.rstrip("\r\n")
         if not body.strip() or body.lstrip().startswith("#"):
             continue
-        if body.lstrip().startswith("- ") and key is not None:
-            # YAML block lists may be indented or flush left; both mean "an item".
-            value = data.setdefault(key, [])
-            if isinstance(value, list):
-                value.append(body.lstrip()[2:].strip().strip("\"'"))
+        if _frontmatter_list_item(data, key, body):
             continue
-        if body[:1] in " \t" and key is not None:  # continuation of the previous key
-            continue
-        match = re.match(r"^([A-Za-z0-9_-]+):(.*)$", body)
-        if not match:
-            continue
-        key, value = match.group(1), match.group(2).strip()
-        if value:
-            data[key] = value.strip("\"'")
-        else:
-            data.setdefault(key, [])
+        key = _frontmatter_key(data, key, body)
     return data
+
+
+def _normalize_frontmatter_line(line: str, name: str, rule: dict, unquote: set[str]) -> str:
+    """One frontmatter line after the rule's unquote/set_name rewrites."""
+    body = line.rstrip("\r\n")
+    match = re.match(r"^([A-Za-z0-9_-]+):(.*)$", body)
+    if not match:
+        return line
+    key, value = match.group(1), match.group(2).lstrip(" \t")
+    rewritten: str | None = None
+    if key in unquote:
+        rewritten = value.strip().strip('"').strip("'")
+    if key == "name" and rule.get("set_name"):
+        rewritten = name
+    if rewritten is None:
+        return line
+    return f"{key}: {rewritten}" + ("\r\n" if line.endswith("\r\n") else "\n")
 
 
 def normalize_entry(raw: bytes, name: str, spec: dict) -> bytes:
@@ -242,20 +272,9 @@ def normalize_entry(raw: bytes, name: str, spec: dict) -> bytes:
     unquote = set(rule.get("unquote", []))
     out: list[str] = [lines[0]]
     for line in block:
-        body = line.rstrip("\r\n")
-        if rule.get("strip_comments") and body.lstrip().startswith("#"):
+        if rule.get("strip_comments") and line.rstrip("\r\n").lstrip().startswith("#"):
             continue
-        match = re.match(r"^([A-Za-z0-9_-]+):(.*)$", body)
-        if match:
-            key, value = match.group(1), match.group(2).lstrip(" \t")
-            rewritten: str | None = None
-            if key in unquote:
-                rewritten = value.strip().strip('"').strip("'")
-            if key == "name" and rule.get("set_name"):
-                rewritten = name
-            if rewritten is not None:
-                line = f"{key}: {rewritten}" + ("\r\n" if line.endswith("\r\n") else "\n")
-        out.append(line)
+        out.append(_normalize_frontmatter_line(line, name, rule, unquote))
     out.extend(lines[closing:])
     return "".join(out).encode("utf-8")
 
@@ -301,6 +320,24 @@ class SourcePlan:
     recorded: dict = field(default_factory=dict)  # previous SOURCES.json entry
 
 
+def _validate_source_rule(source: dict, seen: set[str]) -> None:
+    """Reject a source rule without a unique id, a known kind, or its pin fields."""
+    sid = source.get("id")
+    if not sid:
+        raise RuleError("every source needs an 'id'")
+    if sid in seen:
+        raise RuleError(f"duplicate source id {sid!r}")
+    seen.add(sid)
+    select = source.get("select") or {}
+    if select.get("kind") not in SELECT_KINDS:
+        raise RuleError(f"{sid}: select.kind must be one of {', '.join(SELECT_KINDS)}")
+    if select["kind"] == "in_repo":
+        return
+    for key in ("snapshot", "commit", "license"):
+        if not source.get(key):
+            raise RuleError(f"{sid}: rule is missing '{key}'")
+
+
 def load_rules(path: Path) -> dict:
     if not path.is_file():
         raise RuleError(f"import rules missing: {path}")
@@ -313,19 +350,7 @@ def load_rules(path: Path) -> dict:
         raise RuleError("import rules must contain a non-empty 'sources' list")
     seen: set[str] = set()
     for source in sources:
-        sid = source.get("id")
-        if not sid:
-            raise RuleError("every source needs an 'id'")
-        if sid in seen:
-            raise RuleError(f"duplicate source id {sid!r}")
-        seen.add(sid)
-        select = source.get("select") or {}
-        if select.get("kind") not in SELECT_KINDS:
-            raise RuleError(f"{sid}: select.kind must be one of {', '.join(SELECT_KINDS)}")
-        if select["kind"] != "in_repo":
-            for key in ("snapshot", "commit", "license"):
-                if not source.get(key):
-                    raise RuleError(f"{sid}: rule is missing '{key}'")
+        _validate_source_rule(source, seen)
     return rules
 
 
@@ -360,60 +385,87 @@ def _matches(where: dict, frontmatter: dict[str, object]) -> bool:
     return False
 
 
+def _collect_skill(spec: dict, tree: dict[str, str], name: str, upstream_dir: str) -> SkillRef:
+    """The SkillRef for ``upstream_dir``; it must carry the rule's entry file."""
+    select = spec["select"]
+    entry = select.get("entry", DEFAULT_ENTRY)
+    prefix = upstream_dir.rstrip("/") + "/"
+    files = {p[len(prefix):]: s for p, s in tree.items() if p.startswith(prefix)}
+    present = [f for f in files if f == select.get("entry") or f == DEFAULT_ENTRY]
+    if not present:
+        raise RuleError(f"{spec['id']}: {upstream_dir} carries no {entry!r} at the pin")
+    return SkillRef(name=name, upstream_dir=upstream_dir, files=files, entry=present[0])
+
+
+def _select_entry_dirs(spec: dict, tree: dict[str, str]) -> dict[str, SkillRef]:
+    entry = spec["select"].get("entry", DEFAULT_ENTRY)
+    skills: dict[str, SkillRef] = {}
+    for path in sorted(tree):
+        parts = path.split("/")
+        if len(parts) == 2 and parts[1] == entry:
+            skills[parts[0]] = _collect_skill(spec, tree, parts[0], parts[0])
+    return skills
+
+
+def _select_explicit(spec: dict, tree: dict[str, str]) -> dict[str, SkillRef]:
+    skills: dict[str, SkillRef] = {}
+    for name, upstream_dir in spec["select"]["map"].items():
+        skills[name] = _collect_skill(spec, tree, name, upstream_dir)
+    return skills
+
+
+def _frontmatter_candidates(tree: dict[str, str], prefix: str, entry: str) -> dict[str, str]:
+    """``{directory name: entry blob sha}`` for every ``<prefix><dir>/<entry>``."""
+    candidates: dict[str, str] = {}
+    for path in sorted(tree):
+        if not path.startswith(prefix):
+            continue
+        rest = path[len(prefix):].split("/")
+        if len(rest) == 2 and rest[1] == entry:
+            candidates[rest[0]] = tree[path]
+    return candidates
+
+
+def _select_frontmatter(
+    spec: dict, repo: Path, tree: dict[str, str]
+) -> tuple[dict[str, SkillRef], int]:
+    select = spec["select"]
+    root = select.get("root", "").rstrip("/")
+    prefix = (root + "/") if root else ""
+    candidates = _frontmatter_candidates(tree, prefix, select.get("entry", DEFAULT_ENTRY))
+    universe = len(candidates)
+    expected = select.get("expect_universe")
+    if expected is not None and universe != expected:
+        raise RuleError(
+            f"{spec['id']}: upstream holds {universe} candidates but the rule expects "
+            f"{expected}; the pin or the upstream layout changed"
+        )
+    skills: dict[str, SkillRef] = {}
+    for name, sha in candidates.items():
+        frontmatter = parse_frontmatter(read_blob(repo, sha).decode("utf-8", "replace"))
+        if _matches(select.get("where", {}), frontmatter):
+            skills[name] = _collect_skill(spec, tree, name, prefix + name)
+    return skills, universe
+
+
 def derive_selection(
     spec: dict, repo: Path | None, tree: dict[str, str]
 ) -> tuple[dict[str, SkillRef], int | None]:
     """Re-derive ``{local name: SkillRef}`` (and the upstream universe size) from rules."""
     select = spec["select"]
     kind = select["kind"]
-    skills: dict[str, SkillRef] = {}
     universe: int | None = None
 
     if kind == "in_repo":
-        for name in select.get("skills", []):
-            skills[name] = SkillRef(name=name)
-        return skills, universe
+        return {name: SkillRef(name=name) for name in select.get("skills", [])}, universe
 
     assert repo is not None
-    entry = select.get("entry", DEFAULT_ENTRY)
-
-    def collect(name: str, upstream_dir: str) -> SkillRef:
-        prefix = upstream_dir.rstrip("/") + "/"
-        files = {p[len(prefix):]: s for p, s in tree.items() if p.startswith(prefix)}
-        present = [f for f in files if f == select.get("entry") or f == DEFAULT_ENTRY]
-        if not present:
-            raise RuleError(f"{spec['id']}: {upstream_dir} carries no {entry!r} at the pin")
-        return SkillRef(name=name, upstream_dir=upstream_dir, files=files, entry=present[0])
-
     if kind == "entry_dirs":
-        for path in sorted(tree):
-            parts = path.split("/")
-            if len(parts) == 2 and parts[1] == entry:
-                skills[parts[0]] = collect(parts[0], parts[0])
+        skills = _select_entry_dirs(spec, tree)
     elif kind == "explicit":
-        for name, upstream_dir in select["map"].items():
-            skills[name] = collect(name, upstream_dir)
+        skills = _select_explicit(spec, tree)
     elif kind == "frontmatter":
-        root = select.get("root", "").rstrip("/")
-        prefix = (root + "/") if root else ""
-        candidates: dict[str, str] = {}
-        for path in sorted(tree):
-            if not path.startswith(prefix):
-                continue
-            rest = path[len(prefix):].split("/")
-            if len(rest) == 2 and rest[1] == entry:
-                candidates[rest[0]] = tree[path]
-        universe = len(candidates)
-        expected = select.get("expect_universe")
-        if expected is not None and universe != expected:
-            raise RuleError(
-                f"{spec['id']}: upstream holds {universe} candidates but the rule expects "
-                f"{expected}; the pin or the upstream layout changed"
-            )
-        for name, sha in candidates.items():
-            frontmatter = parse_frontmatter(read_blob(repo, sha).decode("utf-8", "replace"))
-            if _matches(select.get("where", {}), frontmatter):
-                skills[name] = collect(name, prefix + name)
+        skills, universe = _select_frontmatter(spec, repo, tree)
     else:  # pragma: no cover - guarded by load_rules
         raise RuleError(f"{spec['id']}: unsupported select.kind {kind!r}")
 
@@ -473,6 +525,21 @@ def build_plans(
 # --------------------------------------------------------------- destination
 
 
+def _entry_import_file(
+    plan: SourcePlan, skill: SkillRef, sha: str, normalize: dict, entry_name: str
+) -> ImportFile:
+    """The ImportFile for a skill's entry file, normalised when the snapshot is present."""
+    content = normalize_entry(
+        read_blob(plan.repo, sha), skill.name, normalize
+    ) if plan.repo else None
+    return ImportFile(
+        rel=entry_name,
+        upstream_sha=sha,
+        blob_sha=blob_sha1(content) if content is not None else sha,
+        content=content,
+    )
+
+
 def destination_files(plan: SourcePlan) -> dict[str, dict[str, ImportFile]]:
     """``{skill name: {relative path: ImportFile}}`` — what the rules require on disk."""
     spec = plan.spec
@@ -484,16 +551,7 @@ def destination_files(plan: SourcePlan) -> dict[str, dict[str, ImportFile]]:
         for rel in sorted(skill.files):
             sha = skill.files[rel]
             if skill.entry and rel == skill.entry:
-                content = normalize_entry(
-                    read_blob(plan.repo, sha), skill.name, normalize
-                ) if plan.repo else None
-                dest = entry_name
-                files[dest] = ImportFile(
-                    rel=dest,
-                    upstream_sha=sha,
-                    blob_sha=blob_sha1(content) if content is not None else sha,
-                    content=content,
-                )
+                files[entry_name] = _entry_import_file(plan, skill, sha, normalize, entry_name)
             else:
                 files[rel] = ImportFile(rel=rel, upstream_sha=sha, blob_sha=sha)
         out[skill.name] = files
@@ -535,6 +593,116 @@ def check_license_pin(plan: SourcePlan) -> list[Problem]:
     return []
 
 
+def _changed_hint(plan: SourcePlan, want: ImportFile, path: Path) -> str:
+    if want.content is not None:
+        return _diff_hint(want.content, path.read_bytes())
+    try:
+        return _diff_hint(read_blob(plan.repo, want.upstream_sha), path.read_bytes())
+    except RuleError:  # pragma: no cover - upstream vanished mid-run
+        return ""
+
+
+def _check_import_file(
+    plan: SourcePlan,
+    name: str,
+    rel: str,
+    want: ImportFile,
+    repo_root: Path,
+    allow_untracked: bool,
+    path: Path,
+) -> list[Problem]:
+    """Content and tracking problems for one imported file that exists on disk."""
+    problems: list[Problem] = []
+    actual_sha = local_blob_sha(repo_root, path)
+    if actual_sha != want.blob_sha:
+        hint = _changed_hint(plan, want, path)
+        problems.append(
+            Problem(
+                "changed",
+                f"{name}/{rel}: expected blob {want.blob_sha[:12]}…, local content "
+                f"is {actual_sha[:12]}…{hint}",
+            )
+        )
+    if not allow_untracked and not is_tracked(repo_root, path):
+        reason = ignore_rule(repo_root, path)
+        problems.append(
+            Problem(
+                "untracked",
+                f"{name}/{rel} is not tracked by git"
+                + (f" ({reason})" if reason else "")
+                + " — a fresh clone would silently lose it",
+            )
+        )
+    return problems
+
+
+def _check_entry_contract(spec: dict, name: str, dest_dir: Path) -> list[Problem]:
+    """The loader contract (name, description, license) of a skill's entry file."""
+    entry_path = dest_dir / (spec.get("normalize") or {}).get("entry_name", DEFAULT_ENTRY)
+    if not entry_path.is_file():
+        return []
+    problems: list[Problem] = []
+    frontmatter = parse_frontmatter(entry_path.read_text(encoding="utf-8", errors="replace"))
+    if frontmatter.get("name") != name:
+        problems.append(
+            Problem(
+                "contract",
+                f"{name}/{entry_path.name} declares name {frontmatter.get('name')!r}; "
+                "the loader requires it to equal the directory name",
+            )
+        )
+    if not str(frontmatter.get("description", "")).strip():
+        problems.append(
+            Problem("contract", f"{name}/{entry_path.name} has no description")
+        )
+    if not str(frontmatter.get("license", "")).strip() and not spec.get("license"):
+        problems.append(
+            Problem("license", f"{name}/{entry_path.name} declares no license")
+        )
+    return problems
+
+
+def _check_skill_license(spec: dict, name: str, dest_dir: Path) -> list[Problem]:
+    """A per-skill copy of the pinned license text, when the rule demands one."""
+    if not (spec.get("license_per_skill") and spec.get("license_file")):
+        return []
+    licence = dest_dir / spec["license_file"]["path"]
+    if not licence.is_file():
+        return [Problem("license", f"{name}/ has no {licence.name}")]
+    if sha256_normalized(licence.read_bytes()) != spec["license_file"]["sha256"]:
+        return [Problem("license", f"{name}/{licence.name} is not the pinned license text")]
+    return []
+
+
+def _check_skill_dir(
+    plan: SourcePlan,
+    name: str,
+    files: dict[str, ImportFile],
+    dest_dir: Path,
+    repo_root: Path,
+    allow_untracked: bool,
+) -> list[Problem]:
+    """Every problem for one skill directory that exists on disk."""
+    problems: list[Problem] = []
+    on_disk = {
+        path.relative_to(dest_dir).as_posix(): path
+        for path in sorted(dest_dir.rglob("*"))
+        if path.is_file()
+    }
+    for rel, want in sorted(files.items()):
+        if rel not in on_disk:
+            problems.append(Problem("missing", f"{name}/{rel}"))
+            continue
+        problems += _check_import_file(
+            plan, name, rel, want, repo_root, allow_untracked, dest_dir / rel
+        )
+    for rel in sorted(set(on_disk) - set(files)):
+        problems.append(Problem("extra", f"{name}/{rel} is not in the upstream selection"))
+    problems += _check_entry_contract(plan.spec, name, dest_dir)
+    problems += _check_skill_license(plan.spec, name, dest_dir)
+    return problems
+
+
 def check_source(
     plan: SourcePlan,
     skills_dir: Path,
@@ -542,7 +710,6 @@ def check_source(
     allow_untracked: bool = False,
 ) -> list[Problem]:
     problems = check_license_pin(plan)
-    spec = plan.spec
     wanted = destination_files(plan)
 
     for name, files in wanted.items():
@@ -550,77 +717,7 @@ def check_source(
         if not dest_dir.is_dir():
             problems.append(Problem("missing", f"{name}/ (whole directory)"))
             continue
-
-        on_disk = {
-            path.relative_to(dest_dir).as_posix(): path
-            for path in sorted(dest_dir.rglob("*"))
-            if path.is_file()
-        }
-        for rel, want in sorted(files.items()):
-            path = dest_dir / rel
-            if rel not in on_disk:
-                problems.append(Problem("missing", f"{name}/{rel}"))
-                continue
-            actual_sha = local_blob_sha(repo_root, path)
-            if actual_sha != want.blob_sha:
-                hint = ""
-                if want.content is not None:
-                    hint = _diff_hint(want.content, path.read_bytes())
-                else:
-                    try:
-                        hint = _diff_hint(
-                            read_blob(plan.repo, want.upstream_sha), path.read_bytes()
-                        )
-                    except RuleError:  # pragma: no cover - upstream vanished mid-run
-                        hint = ""
-                problems.append(
-                    Problem(
-                        "changed",
-                        f"{name}/{rel}: expected blob {want.blob_sha[:12]}…, local content "
-                        f"is {actual_sha[:12]}…{hint}",
-                    )
-                )
-            if not allow_untracked and not is_tracked(repo_root, path):
-                reason = ignore_rule(repo_root, path)
-                problems.append(
-                    Problem(
-                        "untracked",
-                        f"{name}/{rel} is not tracked by git"
-                        + (f" ({reason})" if reason else "")
-                        + " — a fresh clone would silently lose it",
-                    )
-                )
-        for rel in sorted(set(on_disk) - set(files)):
-            problems.append(Problem("extra", f"{name}/{rel} is not in the upstream selection"))
-
-        entry_path = dest_dir / (spec.get("normalize") or {}).get("entry_name", DEFAULT_ENTRY)
-        if entry_path.is_file():
-            frontmatter = parse_frontmatter(entry_path.read_text(encoding="utf-8", errors="replace"))
-            if frontmatter.get("name") != name:
-                problems.append(
-                    Problem(
-                        "contract",
-                        f"{name}/{entry_path.name} declares name {frontmatter.get('name')!r}; "
-                        "the loader requires it to equal the directory name",
-                    )
-                )
-            if not str(frontmatter.get("description", "")).strip():
-                problems.append(
-                    Problem("contract", f"{name}/{entry_path.name} has no description")
-                )
-            if not str(frontmatter.get("license", "")).strip() and not spec.get("license"):
-                problems.append(
-                    Problem("license", f"{name}/{entry_path.name} declares no license")
-                )
-
-        if spec.get("license_per_skill") and spec.get("license_file"):
-            licence = dest_dir / spec["license_file"]["path"]
-            if not licence.is_file():
-                problems.append(Problem("license", f"{name}/ has no {licence.name}"))
-            elif sha256_normalized(licence.read_bytes()) != spec["license_file"]["sha256"]:
-                problems.append(
-                    Problem("license", f"{name}/{licence.name} is not the pinned license text")
-                )
+        problems += _check_skill_dir(plan, name, files, dest_dir, repo_root, allow_untracked)
     return problems
 
 
@@ -782,13 +879,8 @@ class ApplyStats:
         return self.written + self.unchanged
 
 
-def apply_plan(
-    plan: SourcePlan, skills_dir: Path, repo_root: Path, prune: bool = True
-) -> ApplyStats:
-    """Materialise the plan on disk; only files that differ are rewritten."""
-    stats = ApplyStats()
-    if plan.repo is None:
-        return stats
+def _remove_stale_skills(plan: SourcePlan, skills_dir: Path, stats: ApplyStats) -> None:
+    """Drop skill directories a previous run imported but the rules no longer select."""
     managed = set(plan.skills)
     for stale in sorted(set(plan.recorded.get("skills", [])) - managed):
         stale_dir = skills_dir / stale
@@ -796,29 +888,55 @@ def apply_plan(
             shutil.rmtree(stale_dir)
             stats.removed_skills.append(stale)
 
+
+def _write_skill_files(
+    plan: SourcePlan,
+    dest_dir: Path,
+    files: dict[str, ImportFile],
+    repo_root: Path,
+    stats: ApplyStats,
+) -> None:
+    """Write every wanted file whose local blob differs from the expected one."""
+    for rel, want in sorted(files.items()):
+        target = dest_dir / rel
+        expected = want.content
+        if expected is None:
+            expected = read_blob(plan.repo, want.upstream_sha)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.is_file() and local_blob_sha(repo_root, target) == want.blob_sha:
+            stats.unchanged += 1
+            continue
+        target.write_bytes(expected)
+        stats.written += 1
+
+
+def _prune_skill_dir(name: str, dest_dir: Path, files: dict[str, ImportFile], stats: ApplyStats) -> None:
+    """Remove unwanted files and the empty directories they leave, deepest first."""
+    for path in sorted(dest_dir.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+        rel = path.relative_to(dest_dir).as_posix()
+        if path.is_file() and rel not in files:
+            path.unlink()
+            stats.removed_files.append(f"{name}/{rel}")
+        elif path.is_dir() and not any(path.iterdir()):
+            path.rmdir()
+
+
+def apply_plan(
+    plan: SourcePlan, skills_dir: Path, repo_root: Path, prune: bool = True
+) -> ApplyStats:
+    """Materialise the plan on disk; only files that differ are rewritten."""
+    stats = ApplyStats()
+    if plan.repo is None:
+        return stats
+    _remove_stale_skills(plan, skills_dir, stats)
+
     wanted = destination_files(plan)
     for name, files in sorted(wanted.items()):
         dest_dir = skills_dir / name
         dest_dir.mkdir(parents=True, exist_ok=True)
-        for rel, want in sorted(files.items()):
-            target = dest_dir / rel
-            expected = want.content
-            if expected is None:
-                expected = read_blob(plan.repo, want.upstream_sha)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if target.is_file() and local_blob_sha(repo_root, target) == want.blob_sha:
-                stats.unchanged += 1
-                continue
-            target.write_bytes(expected)
-            stats.written += 1
+        _write_skill_files(plan, dest_dir, files, repo_root, stats)
         if prune:
-            for path in sorted(dest_dir.rglob("*"), key=lambda p: len(p.parts), reverse=True):
-                rel = path.relative_to(dest_dir).as_posix()
-                if path.is_file() and rel not in files:
-                    path.unlink()
-                    stats.removed_files.append(f"{name}/{rel}")
-                elif path.is_dir() and not any(path.iterdir()):
-                    path.rmdir()
+            _prune_skill_dir(name, dest_dir, files, stats)
     return stats
 
 
@@ -834,7 +952,7 @@ def _load_previous_sources(path: Path) -> dict:
         return {}
 
 
-def main(argv: list[str] | None = None) -> int:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Import and verify the external skills under skills/"
     )
@@ -859,112 +977,150 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-prune", action="store_true", help="keep files the rules do not want")
     parser.add_argument("--json", action="store_true", help="machine-readable report")
     parser.add_argument("--quiet", action="store_true", help="only report problems")
-    args = parser.parse_args(argv)
+    return parser
 
-    repo_root = REPO_ROOT
-    skills_dir = SKILLS_DIR
-    rules_path = Path(args.rules).resolve() if args.rules else RULES_PATH
-    snapshot_root = Path(args.snapshot_root).resolve() if args.snapshot_root else None
-    sources_path = skills_dir / SOURCES_FILE
 
+def _usage_error(args: argparse.Namespace) -> bool:
+    """Print and flag flag combinations that only make sense with --check."""
     if args.local_only and not args.check:
         print("ERROR --local-only only applies to --check", file=sys.stderr)
-        return 2
+        return True
     if args.source and not args.check:
         print(
             "ERROR --source requires --check: applying always rewrites the full provenance file",
             file=sys.stderr,
         )
-        return 2
+        return True
+    return False
 
-    try:
-        rules = load_rules(rules_path)
-        plans = build_plans(
-            rules,
-            repo_root,
-            snapshot_root,
-            only=args.source or None,
-            need_upstream=not args.local_only,
-            previous=_load_previous_sources(sources_path),
+
+def _print_check_line(sid: str, plan: SourcePlan, files: int, found: list[Problem]) -> None:
+    verdict = "ok" if not found else f"{len(found)} problem(s)"
+    label = f"{sid:<32}"
+    counts = f"{len(plan.skills):>3} skills"
+    file_count = f"{files:>4} files" if files else "     local"
+    print(f"  {label} {counts} {file_count}  {verdict}")
+
+
+def _print_head_note(plan: SourcePlan) -> None:
+    delta = head_delta(plan.repo, plan.spec["commit"])
+    if delta:
+        print(
+            f"    note: snapshot HEAD is {delta} commit(s) ahead of the pin "
+            f"{plan.spec['commit'][:8]} (content verified at the pin)"
         )
-    except RuleError as exc:
-        print(f"ERROR {exc}", file=sys.stderr)
-        return 2
 
-    report: dict[str, object] = {"mode": "check" if args.check else "apply", "sources": []}
-    problems: list[Problem] = []
 
-    if args.check:
-        for plan in plans:
-            sid = plan.spec["id"]
-            if plan.repo is None:
-                found = check_local_only(plan, skills_dir, repo_root)
-            else:
-                found = check_source(plan, skills_dir, repo_root, args.allow_untracked)
-            problems += found
-            files = sum(len(f) for f in destination_files(plan).values()) if plan.repo else 0
-            report["sources"].append(
-                {"id": sid, "skills": len(plan.skills), "files": files,
-                 "problems": [str(p) for p in found],
-                 "snapshot": str(plan.repo) if plan.repo else None,
-                 "pin": plan.spec.get("commit", "")}
-            )
-            if not args.quiet:
-                verdict = "ok" if not found else f"{len(found)} problem(s)"
-                label = f"{sid:<32}"
-                counts = f"{len(plan.skills):>3} skills"
-                file_count = f"{files:>4} files" if files else "     local"
-                print(f"  {label} {counts} {file_count}  {verdict}")
-            if plan.repo is not None and not args.quiet:
-                delta = head_delta(plan.repo, plan.spec["commit"])
-                if delta:
-                    print(
-                        f"    note: snapshot HEAD is {delta} commit(s) ahead of the pin "
-                        f"{plan.spec['commit'][:8]} (content verified at the pin)"
-                    )
-        if not args.source:
-            extra = check_attribution(plans, rules, skills_dir) + check_index(skills_dir)
-            problems += extra
-            for problem in extra:
-                print(f"  {problem}", file=sys.stderr)
+def _check_plan(
+    args: argparse.Namespace, plan: SourcePlan, skills_dir: Path, repo_root: Path, report: dict
+) -> list[Problem]:
+    """Verify one source, record it in the report and print its status line."""
+    sid = plan.spec["id"]
+    if plan.repo is None:
+        found = check_local_only(plan, skills_dir, repo_root)
     else:
-        totals = ApplyStats()
-        for plan in plans:
-            stats = apply_plan(plan, skills_dir, repo_root, prune=not args.no_prune)
-            totals.written += stats.written
-            totals.unchanged += stats.unchanged
-            totals.removed_files += stats.removed_files
-            totals.removed_skills += stats.removed_skills
-            report["sources"].append(
-                {
-                    "id": plan.spec["id"],
-                    "skills": len(plan.skills),
-                    "written": stats.written,
-                    "unchanged": stats.unchanged,
-                    "removed_files": stats.removed_files,
-                    "removed_skills": stats.removed_skills,
-                }
-            )
-            if not args.quiet:
-                print(
-                    f"  {plan.spec['id']:<32} {len(plan.skills):>3} skills  "
-                    f"{stats.written:>4} written  {stats.unchanged:>4} unchanged"
-                )
-        wrote = write_sources_payload(build_sources_payload(rules, plans), sources_path)
-        regenerate_index(skills_dir)
-        if not args.quiet:
-            print(f"  provenance: {'rewritten' if wrote else 'already current'} ({sources_path.name})")
-            if totals.removed_files:
-                print(f"  pruned {len(totals.removed_files)} stale file(s)")
-            if totals.removed_skills:
-                print(f"  dropped {len(totals.removed_skills)} de-selected skill dir(s)")
+        found = check_source(plan, skills_dir, repo_root, args.allow_untracked)
+    files = sum(len(f) for f in destination_files(plan).values()) if plan.repo else 0
+    report["sources"].append(
+        {"id": sid, "skills": len(plan.skills), "files": files,
+         "problems": [str(p) for p in found],
+         "snapshot": str(plan.repo) if plan.repo else None,
+         "pin": plan.spec.get("commit", "")}
+    )
+    if not args.quiet:
+        _print_check_line(sid, plan, files, found)
+    if plan.repo is not None and not args.quiet:
+        _print_head_note(plan)
+    return found
 
-        # An apply that leaves drift behind is a failure, not a success.
-        for plan in plans:
-            if plan.repo is not None:
-                problems += check_source(plan, skills_dir, repo_root, args.allow_untracked)
-        problems += check_attribution(plans, rules, skills_dir) + check_index(skills_dir)
 
+def _run_check(
+    args: argparse.Namespace,
+    plans: list[SourcePlan],
+    rules: dict,
+    skills_dir: Path,
+    repo_root: Path,
+    report: dict,
+) -> list[Problem]:
+    problems: list[Problem] = []
+    for plan in plans:
+        problems += _check_plan(args, plan, skills_dir, repo_root, report)
+    if not args.source:
+        extra = check_attribution(plans, rules, skills_dir) + check_index(skills_dir)
+        problems += extra
+        for problem in extra:
+            print(f"  {problem}", file=sys.stderr)
+    return problems
+
+
+def _print_apply_summary(wrote: bool, sources_path: Path, totals: ApplyStats) -> None:
+    print(f"  provenance: {'rewritten' if wrote else 'already current'} ({sources_path.name})")
+    if totals.removed_files:
+        print(f"  pruned {len(totals.removed_files)} stale file(s)")
+    if totals.removed_skills:
+        print(f"  dropped {len(totals.removed_skills)} de-selected skill dir(s)")
+
+
+def _apply_one(
+    args: argparse.Namespace,
+    plan: SourcePlan,
+    skills_dir: Path,
+    repo_root: Path,
+    report: dict,
+    totals: ApplyStats,
+) -> None:
+    """Apply one source, fold its stats into ``totals`` and report it."""
+    stats = apply_plan(plan, skills_dir, repo_root, prune=not args.no_prune)
+    totals.written += stats.written
+    totals.unchanged += stats.unchanged
+    totals.removed_files += stats.removed_files
+    totals.removed_skills += stats.removed_skills
+    report["sources"].append(
+        {
+            "id": plan.spec["id"],
+            "skills": len(plan.skills),
+            "written": stats.written,
+            "unchanged": stats.unchanged,
+            "removed_files": stats.removed_files,
+            "removed_skills": stats.removed_skills,
+        }
+    )
+    if not args.quiet:
+        print(
+            f"  {plan.spec['id']:<32} {len(plan.skills):>3} skills  "
+            f"{stats.written:>4} written  {stats.unchanged:>4} unchanged"
+        )
+
+
+def _run_apply(
+    args: argparse.Namespace,
+    plans: list[SourcePlan],
+    rules: dict,
+    skills_dir: Path,
+    repo_root: Path,
+    report: dict,
+) -> list[Problem]:
+    sources_path = skills_dir / SOURCES_FILE
+    totals = ApplyStats()
+    for plan in plans:
+        _apply_one(args, plan, skills_dir, repo_root, report, totals)
+    wrote = write_sources_payload(build_sources_payload(rules, plans), sources_path)
+    regenerate_index(skills_dir)
+    if not args.quiet:
+        _print_apply_summary(wrote, sources_path, totals)
+
+    # An apply that leaves drift behind is a failure, not a success.
+    problems: list[Problem] = []
+    for plan in plans:
+        if plan.repo is not None:
+            problems += check_source(plan, skills_dir, repo_root, args.allow_untracked)
+    problems += check_attribution(plans, rules, skills_dir) + check_index(skills_dir)
+    return problems
+
+
+def _print_outcome(
+    args: argparse.Namespace, plans: list[SourcePlan], problems: list[Problem], report: dict
+) -> None:
     report["problems"] = [str(p) for p in problems]
     report["ok"] = not problems
     if args.json:
@@ -988,6 +1144,38 @@ def main(argv: list[str] | None = None) -> int:
             + ("fix the imports or the rules" if args.check else "apply did not converge"),
             file=sys.stderr,
         )
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
+
+    repo_root = REPO_ROOT
+    skills_dir = SKILLS_DIR
+    rules_path = Path(args.rules).resolve() if args.rules else RULES_PATH
+    snapshot_root = Path(args.snapshot_root).resolve() if args.snapshot_root else None
+    sources_path = skills_dir / SOURCES_FILE
+
+    if _usage_error(args):
+        return 2
+
+    try:
+        rules = load_rules(rules_path)
+        plans = build_plans(
+            rules,
+            repo_root,
+            snapshot_root,
+            only=args.source or None,
+            need_upstream=not args.local_only,
+            previous=_load_previous_sources(sources_path),
+        )
+    except RuleError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 2
+
+    report: dict[str, object] = {"mode": "check" if args.check else "apply", "sources": []}
+    run = _run_check if args.check else _run_apply
+    problems = run(args, plans, rules, skills_dir, repo_root, report)
+    _print_outcome(args, plans, problems, report)
     return 1 if problems else 0
 
 
