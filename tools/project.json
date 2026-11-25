@@ -38,7 +38,8 @@
   "hygiene": {
     "allowedRootDirs": [
       ".collab",
-      "rangekit"
+      "rangekit",
+      "skills"
     ]
   }
 }
