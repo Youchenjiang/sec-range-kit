@@ -208,7 +208,7 @@ def _prepare_files(cfg: dict) -> None:
             os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)  # NOSONAR staged_path
     if not os.path.exists(cfg["requests"]):  # NOSONAR staged_path
         # cfg paths were confined to the staging directory by staged_path in _settings.
-        open(cfg["requests"], "a", encoding="utf-8").close()  # skipcq: PTC-W6004 NOSONAR staged_path
+        open(cfg["requests"], "a", encoding="utf-8").close()  # NOSONAR staged_path; skipcq: PTC-W6004
     if os.path.exists(cfg["responses"]):  # NOSONAR staged_path
         os.remove(cfg["responses"])  # NOSONAR staged_path
 
@@ -283,7 +283,7 @@ def _run_server(cfg: dict, stderr_sink) -> int:
         print(f"bridge: cannot start server {cfg['server_argv']!r}: {exc}", file=sys.stderr)
         return 2
 
-    responses = open(cfg["responses"], "a", encoding="utf-8", buffering=1)  # skipcq: PTC-W6004 NOSONAR staged_path
+    responses = open(cfg["responses"], "a", encoding="utf-8", buffering=1)  # NOSONAR staged_path; skipcq: PTC-W6004
     stopped = threading.Event()
 
     def pump_stdout() -> None:
@@ -344,7 +344,7 @@ def main(argv: list[str] | None = None) -> int:
 
     _prepare_files(cfg)
     stderr_path = cfg["responses"] + ".stderr"
-    with open(stderr_path, "a", encoding="utf-8") as stderr_sink:  # skipcq: PTC-W6004 NOSONAR staged_path
+    with open(stderr_path, "a", encoding="utf-8") as stderr_sink:  # NOSONAR staged_path; skipcq: PTC-W6004
         stderr_sink.write(
             f"### bridge start {time.strftime('%Y-%m-%dT%H:%M:%S')} argv={cfg['server_argv']}\n"
         )
