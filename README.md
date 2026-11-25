@@ -35,7 +35,7 @@ sec-range-kit/
 
 The kit improves with every event instead of being copied per event.
 
-1. **Before an event**: clone the repo and branch `event/<name>` from `main`.
+1. **Before an event**: clone the repo and branch `event/<year>-<name>` from `main` (e.g. `event/2026-hitcon`). Event branches push without a PR body; commit lint and tests still run.
 2. **During the event**: work freely on the event branch. Case data, evidence and notes stay **outside** the repository; point the tools at them with environment variables (see `.env.example` once tools land).
 3. **After the event**: open PRs that bring only reusable improvements back to `main` (bug fixes, new tools, better templates). Event-only hacks stay on the branch.
 4. **Release**: tag `main` after the merge, e.g. `v2026-hitcon`, and add a retrospective under `docs/retros/`.
