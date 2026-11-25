@@ -1,0 +1,262 @@
+# ==============================================================================
+# 🚦 Repository Policy & Conventional Commit Gatekeeper (PR 與提交看門狗)
+#
+# 【生命週期】
+# PR Gate / Hard Gate：只在 Pull Request 階段執行，格式違規會直接讓檢查失敗。
+#
+# 【功能說明】
+# 1. 嚴格驗證 PR 標題與所有 Commit Subject 是否遵循 Conventional Commits 格式：
+#    `<type>(<scope>): <subject>` 或 `<type>: <subject>`
+# 2. 長度限制：標頭不可超過 72 字元，且結尾不可帶句號 (`.`)。
+# 3. 杜絕模糊提交：禁止使用 `update`, `misc`, `stuff`, `changes`, `fix bug` 等空洞主旨。
+# 4. PR Body 契約：章節、placeholder 與 External provider 勾選完全交給
+#    tools/pr_preflight.py 判定（與本機 preflight 同一份 tools/pr_body_contract.py），
+#    本 workflow 只另外檢查 Markdown 格式衛生。
+# 5. PR 元件檢查：自動指派作者（Author Auto-assign），提醒缺失的 Label 與 Milestone。
+#
+# 【分級報告機制】
+# - ❌ Blocker (硬性錯誤)：格式不符、超長、帶句號、模糊字 -> 觸發 `core.setFailed()` 阻擋合併。
+# - ⚠️ Warning (軟性提醒)：缺少 Label、未關聯 Milestone -> 輸出警告提醒補件，不阻擋合併。
+# - 📋 Step Summary：在 GitHub Actions Summary 面板以 Markdown 表格條列檢驗結果與修復指令。
+# ==============================================================================
+
+name: Repository Policy
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  conventional-policy:
+    name: PR and Commit Policy Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the base branch PR contract
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+          sparse-checkout: |
+            tools
+      - name: Verify the PR body against the repository contract
+        if: github.event_name == 'pull_request'
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s' "$PR_BODY" > "$RUNNER_TEMP/pr_body.md"
+          python3 base/tools/pr_preflight.py --check-body "$RUNNER_TEMP/pr_body.md"
+      - name: Validate PR Title, Commits & Metadata
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const allowedTypes = [
+              "feat",
+              "fix",
+              "refactor",
+              "docs",
+              "test",
+              "chore",
+              "style",
+              "perf",
+              "security",
+            ];
+            // Allowed scopes can be tailored to the archetype during scaffolding via SCOPES_PLACEHOLDER
+            const allowedScopes = [
+              /* SCOPES_PLACEHOLDER_START */
+              "core",
+              "tools",
+              "dfir",
+              "vm",
+              "collab",
+              "mcp",
+              "skills",
+              "playbook",
+              "event",
+              "data",
+              "test",
+              "deps",
+              "docs",
+              "ci",
+              "setup",
+              "agent",
+              "chore",
+              /* SCOPES_PLACEHOLDER_END */
+            ];
+
+            const typePattern = allowedTypes.join("|");
+            const scopePattern = allowedScopes.join("|");
+            const regex = new RegExp(`^(${typePattern})(?:\\((${scopePattern})\\))?: [a-z0-9].*$`);
+
+            const blockers = [];
+            const warnings = [];
+            const summaryRows = [];
+
+            function checkSubject(subject, label, maxLength = 72) {
+              const text = (subject || "").trim();
+              const issues = [];
+              if (!regex.test(text)) {
+                issues.push("Does not match `<type>(<scope>): <subject>` or `<type>: <subject>` with an allowed type/scope.");
+              }
+              if (text.endsWith(".")) {
+                issues.push("Must not end with a trailing period (`.`).");
+              }
+              if (text.length > maxLength) {
+                issues.push(`Length (${text.length} chars) exceeds maximum ${maxLength} chars.`);
+              }
+              const desc = text.replace(new RegExp(`^(${typePattern})(?:\\((${scopePattern})\\))?:\\s+`), "");
+              if (/^(update|misc|stuff|changes|fix bug|bug fix)$/i.test(desc)) {
+                issues.push("Description is too vague (avoid 'update', 'misc', 'fix bug').");
+              }
+              return issues;
+            }
+
+            const isPR = context.eventName === "pull_request" && Boolean(context.payload.pull_request);
+
+            if (isPR) {
+              // 1. Check PR Title
+              const prTitle = context.payload.pull_request.title;
+              const titleIssues = checkSubject(prTitle, "PR Title", 72);
+              if (titleIssues.length > 0) {
+                blockers.push({ target: "PR Title", text: prTitle, issues: titleIssues });
+                summaryRows.push(["PR Title", `\`${prTitle}\``, "❌ Failed", titleIssues.join("<br>")]);
+              } else {
+                summaryRows.push(["PR Title", `\`${prTitle}\``, "✅ Passed", "-"]);
+              }
+
+              // 2. Check PR Body formatting hygiene only: the section and provider
+              // requirements are enforced by tools/pr_preflight.py in the step above.
+              const prBody = (context.payload.pull_request.body || "").trim();
+              const bodyIssues = [];
+              if (!prBody) {
+                bodyIssues.push("PR description body must not be empty.");
+              } else {
+                // Check for corrupted escaped inline code artifacts (e.g. \npm test\ instead of `npm test`)
+                const escapedArtifactPattern = /\\([a-zA-Z0-9_./#:@<>()'" -]+)\\/;
+                if (escapedArtifactPattern.test(prBody)) {
+                  const matched = prBody.match(escapedArtifactPattern);
+                  bodyIssues.push(`PR body contains corrupted escaped inline code artifacts ("${matched[0]}" instead of \`${matched[1]}\`). Use backticks for code and paths.`);
+                }
+
+                // Check for broken or trailing escape backslashes on checklist items
+                const checklistLines = prBody.split("\n").map((line) => line.trim()).filter((line) => /^[-*+]\s+\[[ xX]\]/.test(line));
+                for (const rawLine of checklistLines) {
+                  if (/(?:^|[^\\])\\[\s\S]*$/.test(rawLine) && (/\\$/.test(rawLine) || /^[-*+]\s+\[[ xX]\]\s*\\/.test(rawLine))) {
+                    bodyIssues.push(`Checklist item contains invalid or escaped backslashes: "${rawLine}".`);
+                  }
+                }
+
+                // Check for unmatched backticks across the entire PR body
+                const backtickCount = (prBody.match(/`/g) || []).length;
+                if (backtickCount % 2 !== 0) {
+                  bodyIssues.push(`PR body has an unmatched backtick (total: ${backtickCount}). Ensure all code spans are closed.`);
+                }
+              }
+
+              if (bodyIssues.length > 0) {
+                blockers.push({ target: "PR Body", text: "PR Body Formatting", issues: bodyIssues });
+                summaryRows.push(["PR Body", "Formatting Hygiene", "❌ Failed", bodyIssues.join("<br>")]);
+              } else {
+                summaryRows.push(["PR Body", "Formatting Hygiene", "✅ Passed", "-"]);
+              }
+            } else {
+              summaryRows.push(["Trunk Push", `\`${context.ref}\``, "ℹ️ Info", "Direct trunk push validated without PR envelope."]);
+            }
+
+            // 3. Check Commits
+            let commitList = [];
+            if (isPR) {
+              const fetched = await github.paginate(github.rest.pulls.listCommits, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.payload.pull_request.number,
+                per_page: 100,
+              });
+              commitList = fetched.map(c => ({
+                shaShort: c.sha.slice(0, 7),
+                message: c.commit.message || "",
+              }));
+            } else if (context.payload.commits && context.payload.commits.length > 0) {
+              commitList = context.payload.commits.map(c => ({
+                shaShort: (c.id || c.sha || "").slice(0, 7),
+                message: c.message || "",
+              }));
+            }
+
+            for (const c of commitList) {
+              const shaShort = c.shaShort;
+              const lines = (c.message || "").replace(/\r\n/g, "\n").split("\n");
+              const firstLine = lines[0].trim();
+              // Ignore merge or fixup commits
+              if (/^(Merge|Revert|fixup!|squash!)/.test(firstLine)) {
+                summaryRows.push([`Commit ${shaShort}`, `\`${firstLine}\``, "⚪ Ignored", "Merge / fixup commit"]);
+                continue;
+              }
+              const commitIssues = checkSubject(firstLine, `Commit ${shaShort}`, 72);
+
+              // Check body for numbered list (NCUIM parity)
+              const bodyLines = lines.slice(1).filter((l) => !l.trim().startsWith("#"));
+              const body = bodyLines.join("\n");
+              if (!/^\s{0,3}1[.)]\s+/m.test(body)) {
+                commitIssues.push("Commit body must contain a numbered list in English (e.g. `1. Explain what changed.`).");
+              }
+
+              if (commitIssues.length > 0) {
+                blockers.push({ target: `Commit ${shaShort}`, text: firstLine, issues: commitIssues });
+                summaryRows.push([`Commit ${shaShort}`, `\`${firstLine}\``, "❌ Failed", commitIssues.join("<br>")]);
+              } else {
+                summaryRows.push([`Commit ${shaShort}`, `\`${firstLine}\``, "✅ Passed", "-"]);
+              }
+            }
+
+            // 4. Check Metadata (Warnings only, non-blocking; PR only)
+            if (isPR) {
+              const pr = context.payload.pull_request;
+              if (!pr.assignees || pr.assignees.length === 0) {
+                try {
+                  await github.rest.issues.addAssignees({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: pr.number,
+                    assignees: [pr.user.login],
+                  });
+                } catch (err) {
+                  warnings.push(`Auto-assign author failed: ${err.message}`);
+                }
+              }
+
+              if (!pr.labels || pr.labels.length === 0) {
+                warnings.push("No labels attached to PR. Please add a relevant scope/type label.");
+              }
+            }
+
+            // 5. Output Summary Table
+            await core.summary
+              .addHeading("📋 Repository Policy Validation Summary", 2)
+              .addTable([
+                [{ data: "Item", header: true }, { data: "Subject", header: true }, { data: "Status", header: true }, { data: "Details", header: true }],
+                ...summaryRows,
+              ])
+              .write();
+
+            if (warnings.length > 0) {
+              for (const w of warnings) {
+                core.warning(`[Policy Warning] ${w}`);
+              }
+            }
+
+            // 6. Hard Fail only on Blocker errors
+            if (blockers.length > 0) {
+              for (const b of blockers) {
+                for (const iss of b.issues) {
+                  core.error(`[Policy Blocker] ${b.target}: ${iss}\n  Subject: "${b.text}"`);
+                }
+              }
+              core.setFailed(`Repository policy check failed with ${blockers.length} blocking error(s). Review the Step Summary table above for details.`);
+            }

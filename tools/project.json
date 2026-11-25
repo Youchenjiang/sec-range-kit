@@ -1,0 +1,38 @@
+{
+  "name": "sec-range-kit",
+  "archetype": "sec-research",
+  "ecosystem": "python",
+  "flow": "pr",
+  "features": [
+    "git-worktree"
+  ],
+  "scopes": [
+    "core",
+    "tools",
+    "dfir",
+    "vm",
+    "collab",
+    "mcp",
+    "skills",
+    "playbook",
+    "event",
+    "data",
+    "test",
+    "deps",
+    "docs",
+    "ci",
+    "setup",
+    "agent",
+    "chore"
+  ],
+  "build": {
+    "lint": "python -m flake8",
+    "test": "python -m unittest discover -s tests",
+    "build": ""
+  },
+  "release": {
+    "strategy": "github-tag",
+    "versionFile": "VERSION",
+    "syncFiles": []
+  }
+}
