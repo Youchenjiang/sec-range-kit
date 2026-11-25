@@ -856,7 +856,7 @@ def _server_status_line(registry: dict, node_policy: dict, entry: dict) -> str:
     )
 
 
-def command_list(args: argparse.Namespace) -> int:
+def command_list(_args: argparse.Namespace) -> int:
     """Offline: show registered servers and whether their runtime is provisioned."""
     registry = load_registry()
     servers = registry.get("servers", [])

@@ -395,7 +395,7 @@ def process_incoming_events(
     state_path: Path,
 ) -> int:
     announced = 0
-    for event_path, payload in protocol.incoming_events(session):
+    for _event_path, payload in protocol.incoming_events(session):
         if case_filters and payload.get("case_id") not in case_filters:
             continue
         event_id = payload.get("event_id")
