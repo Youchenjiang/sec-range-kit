@@ -18,10 +18,12 @@ Initial scaffold. Tooling is being migrated from sec-compendium, starting with t
 
 ```text
 sec-range-kit/
-├── dfir/        # Evidence parsers and query helpers (E01, ESE, AD1, auditd)
-├── vm/          # Analysis VM operations (vmrun guest ops, setup/cleanup scripts)
-├── collab/      # Multi-session collaboration bus for team play
-├── mcp/         # MCP bridges and the server registry
+├── rangekit/        # Python package (pip install -e ".[dfir]")
+│   ├── common/      # Shared path safety checks
+│   ├── dfir/        # Evidence parsers and query helpers (E01, ESE, AD1, auditd)
+│   ├── vm/          # Analysis VM operations (vmrun guest ops, setup/cleanup scripts)
+│   ├── collab/      # Multi-session collaboration bus for team play
+│   └── mcp/         # MCP bridges and the server registry
 ├── skills/      # Agent skills (with upstream source and license manifest)
 ├── playbooks/   # Reusable game-day templates (role split SOP, daily decision cards)
 ├── docs/        # ADRs and per-event retrospectives
