@@ -25,6 +25,7 @@ import asyncio
 import json
 import os
 import sys
+import tempfile
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -96,9 +97,24 @@ async def run(args: argparse.Namespace) -> int:
                 ok = False
 
     if args.out:
-        with open(args.out, "w", encoding="utf-8") as fh:
+        out_path = confined_output_path(args.out)
+        with open(out_path, "w", encoding="utf-8") as fh:  # NOSONAR confined_output_path
             fh.write("\n".join(_lines) + "\n")
     return 0 if ok else 1
+
+
+def confined_output_path(raw: str) -> str:
+    """Resolve --out and refuse anything outside the working directory or the temp directory."""
+    real = os.path.realpath(raw)
+    for root in (os.getcwd(), tempfile.gettempdir()):
+        root = os.path.realpath(root)
+        try:
+            inside = os.path.commonpath([real, root]) == root
+        except ValueError:  # different drives on Windows
+            inside = False
+        if inside:
+            return real
+    raise SystemExit(f"--out must stay inside the working directory or the temp directory: {raw}")
 
 
 def main() -> int:
