@@ -189,12 +189,12 @@ def _var_name(value: object, *, field: str, entry_name: str) -> str | None:
     """Environment variable name a field points at, or ``None`` when it is a literal."""
     if not isinstance(value, dict):
         return None
-    secret = value.get("secret") or value.get("secret_env")
-    if not isinstance(secret, str) or not secret.strip():
+    var = value.get("secret") or value.get("secret_env")
+    if not isinstance(var, str) or not var.strip():
         raise TransportError(
             f"{entry_name}: {field} must be a literal or {{\"secret\": \"NAME\"}}, got {value!r}"
         )
-    return secret.strip()
+    return var.strip()
 
 
 def _field_value(
@@ -335,9 +335,9 @@ def _plan_ssh(entry_name: str, node: dict, exec_block: dict, *, which, var_looku
     env: dict[str, str] = {}
     notes: list[str] = ["key-based ssh (BatchMode); no secret value is sent to the node"]
 
-    password_secret = conf.get("password_secret")
-    if password_secret:
-        password_name = str(password_secret).strip()
+    password_var = conf.get("password_secret")
+    if password_var:
+        password_name = str(password_var).strip()
         if not _ENV_NAME_RE.fullmatch(password_name):
             raise TransportError(
                 f"{entry_name}: ssh.password_secret must be an environment variable name"

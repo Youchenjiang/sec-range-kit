@@ -51,7 +51,7 @@ PROBE_PATH = MCP_DIR / "tools" / "mcp_probe.py"
 NODE_BRIDGE_PATH = MCP_DIR / "tools" / "mcp_node_bridge.py"
 #: Host-side vmrun adapter that exposes a guest server as a local stdio child.
 VMRUN_BRIDGE_PATH = MCP_DIR / "tools" / "mcp_vmrun_bridge.py"
-SECRETS_PATH = protocol.REPO_ROOT / ".env"
+ENV_FILE_PATH = protocol.REPO_ROOT / ".env"
 GATE_LOG_PATH = protocol.RUNTIME_DIR / "mcp-gate.jsonl"
 
 #: How long a live MCP session may run before we treat it as hung.
@@ -95,7 +95,7 @@ def parse_env_file(text: str) -> dict[str, str]:
     surrounding single/double quotes are stripped. Values stay literal (no
     variable expansion), so a token containing ``$`` survives unchanged.
     """
-    secrets: dict[str, str] = {}
+    env_values: dict[str, str] = {}
     for raw in text.splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -111,8 +111,8 @@ def parse_env_file(text: str) -> dict[str, str]:
             value = value[1:-1]
         if not re.fullmatch(r"[A-Za-z_]\w*", key, re.ASCII):
             continue
-        secrets[key] = value
-    return secrets
+        env_values[key] = value
+    return env_values
 
 
 def declared_var_names(entry: dict) -> list[str]:
@@ -146,7 +146,7 @@ def resolve_named_vars(
     variable of the same name. Names outside the list are never returned, so a
     caller (server or transport wrapper) cannot harvest unrelated credentials.
     """
-    path = Path(env_file) if env_file is not None else SECRETS_PATH
+    path = Path(env_file) if env_file is not None else ENV_FILE_PATH
     stored: dict[str, str] = {}
     if path.exists():
         try:
@@ -655,12 +655,12 @@ def resolve_session_plan(
     return plan
 
 
-def _child_env(plan: dict, secrets: dict[str, str] | None = None) -> dict:
+def _child_env(plan: dict, env_values: dict[str, str] | None = None) -> dict:
     """Child environment for one session: plan overrides plus declared secrets only."""
     env = dict(os.environ)
     env["PATH"] = plan["path_prepend"] + os.pathsep + env.get("PATH", "")
     env.update(plan.get("env") or {})
-    for name, value in (secrets or {}).items():
+    for name, value in (env_values or {}).items():
         env[name] = value
     return env
 
@@ -704,7 +704,7 @@ def _session_vars(server: str, entry: dict, transport: str, plan: dict) -> dict[
                 "runner.node.container.secrets to forward it explicitly"
             )
         return {}
-    secrets, missing = resolve_named_vars(plan["declared_vars"])
+    env_values, missing = resolve_named_vars(plan["declared_vars"])
     if missing and binding["required"]:
         raise ValueError(
             f"{server}: missing required secret env names {', '.join(missing)}; "
@@ -713,7 +713,7 @@ def _session_vars(server: str, entry: dict, transport: str, plan: dict) -> dict[
     # ``env_from_vars`` renames a declared secret onto the variable its
     # wrapper expects; values never live in the plan.
     return {
-        plan["env_from_vars"].get(name, name): value for name, value in secrets.items()
+        plan["env_from_vars"].get(name, name): value for name, value in env_values.items()
     }
 
 
@@ -1012,7 +1012,7 @@ def command_gate(args: argparse.Namespace) -> int:
     return 0 if decision["decision"] == "allow" else 2
 
 
-def command_secrets(args: argparse.Namespace) -> int:
+def command_var_status(args: argparse.Namespace) -> int:
     """Offline: show which secret names a server may receive and their readiness.
 
     Values are never printed - only the declared names and whether each one
@@ -1074,11 +1074,11 @@ def add_subcommands(parser: argparse.ArgumentParser) -> None:
     gate.add_argument("--authorized", default="", help="Reason an approved call would record")
     gate.set_defaults(func=command_gate)
 
-    secrets = sub.add_parser(
+    env_values = sub.add_parser(
         "secrets", help="Offline: show a server's declared secret names and their readiness"
     )
-    secrets.add_argument("--server", required=True)
-    secrets.set_defaults(func=command_secrets)
+    env_values.add_argument("--server", required=True)
+    env_values.set_defaults(func=command_var_status)
 
 
 def main(argv: list[str] | None = None) -> int:

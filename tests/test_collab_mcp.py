@@ -484,11 +484,11 @@ class McpSecretsTests(unittest.TestCase):
             ]
         }
         with patch.object(collab_mcp, "load_registry", return_value=registry), patch.object(
-            collab_mcp, "SECRETS_PATH", Path("definitely-absent-.env")
+            collab_mcp, "ENV_FILE_PATH", Path("definitely-absent-.env")
         ), patch.dict(os.environ, {"HITCON_MCP_TEST_TOKEN": "super-secret-value"}, clear=False):
             buffer = io.StringIO()
             with contextlib.redirect_stdout(buffer):
-                code = collab_mcp.command_secrets(argparse.Namespace(server="gated"))
+                code = collab_mcp.command_var_status(argparse.Namespace(server="gated"))
         output = buffer.getvalue()
         self.assertEqual(code, 0)
         self.assertIn("HITCON_MCP_TEST_TOKEN present", output)
@@ -520,7 +520,7 @@ class McpSecretsTests(unittest.TestCase):
             with patch.object(collab_mcp.protocol, "REPO_ROOT", root), patch.object(
                 collab_mcp, "PROBE_PATH", probe
             ), patch.object(
-                collab_mcp, "SECRETS_PATH", root / ".env"
+                collab_mcp, "ENV_FILE_PATH", root / ".env"
             ), patch.object(
                 collab_mcp, "GATE_LOG_PATH", root / "gate.jsonl"
             ), patch.dict(

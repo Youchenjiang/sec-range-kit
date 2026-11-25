@@ -707,7 +707,7 @@ class CollabIntegrationTests(unittest.TestCase):
             # a file that does not exist and supplies the values through the process
             # environment, so it behaves the same on a clone and in CI.
             with patch.dict(os.environ, {"KALI_HOST": "10.0.0.5", "KALI_USER": "analyst"}):
-                with patch.object(collab_mcp, "SECRETS_PATH", root / "no-.env"):
+                with patch.object(collab_mcp, "ENV_FILE_PATH", root / "no-.env"):
                     with patch.object(collab_mcp.protocol, "REPO_ROOT", root):
                         plan = collab_mcp.resolve_session_plan(
                             entry, self._registry(policy_rel, entry)
@@ -726,7 +726,7 @@ class CollabIntegrationTests(unittest.TestCase):
             entry["secrets_binding"] = {"required": True, "env": ["SEMGREP_APP_TOKEN"]}
             registry = self._registry(policy_rel, entry)
             with patch.dict(os.environ, {"KALI_HOST": "10.0.0.5", "KALI_USER": "analyst"}):
-                with patch.object(collab_mcp, "SECRETS_PATH", root / "no-.env"):
+                with patch.object(collab_mcp, "ENV_FILE_PATH", root / "no-.env"):
                     with patch.object(collab_mcp.protocol, "REPO_ROOT", root):
                         with self.assertRaises(ValueError) as ctx:
                             collab_mcp.run_session(registry, "kali-scanner")
