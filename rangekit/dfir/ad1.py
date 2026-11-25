@@ -100,7 +100,6 @@ class SegmentReader:
         return b"".join(chunks)
 
 
-
 def find_segments(image_path):
     base, ext = os.path.splitext(image_path)
     if ext.lower() != ".ad1":
