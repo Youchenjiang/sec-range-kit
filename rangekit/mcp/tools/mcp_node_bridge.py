@@ -267,7 +267,8 @@ def _run_server(cfg: dict, stderr_sink) -> int:
     env = dict(os.environ)
     env.update({str(key): str(value) for key, value in cfg["extra_env"].items()})
     try:
-        server = subprocess.Popen(
+        # The server argv comes from the host-staged config, not from model output.
+        server = subprocess.Popen(  # NOSONAR
             cfg["server_argv"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -278,7 +279,7 @@ def _run_server(cfg: dict, stderr_sink) -> int:
             bufsize=1,
             env=env,
             cwd=cfg["cwd"],
-        )  # NOSONAR: server argv comes from the host-staged config, not from model output
+        )
     except OSError as exc:
         print(f"bridge: cannot start server {cfg['server_argv']!r}: {exc}", file=sys.stderr)
         return 2
