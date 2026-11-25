@@ -26,7 +26,7 @@ import skill_import as si  # noqa: E402
 
 
 def _git(cwd: Path, *args: str) -> str:
-    proc = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True)
+    proc = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, check=False)
     if proc.returncode != 0:
         raise AssertionError(
             f"git {' '.join(args)} failed in {cwd}: {proc.stderr.decode('utf-8', 'replace')}"
@@ -161,16 +161,19 @@ class Case:
         )
 
     def plan(self, source_id: str):
-        return next(p for p in self.plans() if p.spec["id"] == source_id)
+        return next(((p for p in self.plans() if p.spec["id"] == source_id)), None)
 
     def run(self, argv: list[str]) -> tuple[int, str, str]:
         """Drive ``main`` against this workspace, capturing its output."""
         stdout, stderr = io.StringIO(), io.StringIO()
-        with patch.object(si, "REPO_ROOT", self.repo), patch.object(
-            si, "SKILLS_DIR", self.skills
-        ), patch.object(si, "RULES_PATH", self.rules_path):
-            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-                code = si.main(argv)
+        with (
+            patch.object(si, "REPO_ROOT", self.repo),
+            patch.object(si, "SKILLS_DIR", self.skills),
+            patch.object(si, "RULES_PATH", self.rules_path),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            code = si.main(argv)
         return code, stdout.getvalue(), stderr.getvalue()
 
     def apply(self) -> tuple[int, str, str]:
@@ -559,7 +562,8 @@ class RealWorkspaceTests(unittest.TestCase):
         code, stdout, stderr = self._run(["--check"])
         self.assertEqual(code, 0, stderr + stdout)
 
-    def _run(self, argv: list[str]) -> tuple[int, str, str]:
+    @staticmethod
+    def _run(argv: list[str]) -> tuple[int, str, str]:
         stdout, stderr = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             code = si.main(argv)

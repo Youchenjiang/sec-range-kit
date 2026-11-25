@@ -49,9 +49,9 @@ class SkillIndexTests(unittest.TestCase):
 
     def test_folded_description_scalar_is_flattened(self) -> None:
         """hitcon-dfir-vm-ops uses `description: >-` spanning several lines."""
-        record = next(
+        record = next(((
             r for r in gsi.collect_records() if r["directory"] == "hitcon-dfir-vm-ops"
-        )
+        )), None)
         self.assertTrue(record["description"].startswith("Connect to and operate"))
         self.assertNotIn(">", record["description"])
         self.assertNotIn("\n", record["description"])
@@ -88,11 +88,11 @@ class SkillIndexTests(unittest.TestCase):
 
     def test_anthropic_import_ships_upstream_licence_verbatim(self) -> None:
         """Every imported directory carries the unmodified upstream Apache-2.0 text."""
-        source = next(
+        source = next(((
             s
             for s in gsi.load_sources()["sources"]
             if s["id"] == "anthropic-cybersecurity-skills"
-        )
+        )), None)
         digests = set()
         for name in source["skills"]:
             directory = gsi.SKILLS_DIR / name
@@ -118,16 +118,20 @@ class SkillIndexTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             stale = Path(tmp) / "INDEX.md"
             stale.write_text("# wrong index\n", encoding="utf-8")
-            with patch.object(gsi, "INDEX_PATH", stale):
-                with contextlib.redirect_stderr(io.StringIO()):
-                    self.assertEqual(gsi.main(["--check"]), 1)
+            with (
+                patch.object(gsi, "INDEX_PATH", stale),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(gsi.main(["--check"]), 1)
 
     def test_check_fails_when_index_is_absent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             absent = Path(tmp) / "INDEX.md"
-            with patch.object(gsi, "INDEX_PATH", absent):
-                with contextlib.redirect_stderr(io.StringIO()):
-                    self.assertEqual(gsi.main(["--check"]), 1)
+            with (
+                patch.object(gsi, "INDEX_PATH", absent),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(gsi.main(["--check"]), 1)
 
     def test_unattributed_skill_is_rejected(self) -> None:
         """A skill missing from SOURCES.json must fail, not be silently indexed."""
@@ -142,11 +146,12 @@ class SkillIndexTests(unittest.TestCase):
                 json.dumps({"sources": [{"id": "x", "license": "MIT", "skills": []}]}),
                 encoding="utf-8",
             )
-            with patch.object(gsi, "SKILLS_DIR", root), patch.object(
-                gsi, "SOURCES_PATH", root / "SOURCES.json"
+            with (
+                patch.object(gsi, "SKILLS_DIR", root),
+                patch.object(gsi, "SOURCES_PATH", root / "SOURCES.json"),
+                self.assertRaises(ValueError) as ctx,
             ):
-                with self.assertRaises(ValueError) as ctx:
-                    gsi.collect_records()
+                gsi.collect_records()
         self.assertIn("unattributed", str(ctx.exception))
 
     def test_skill_listed_but_absent_is_rejected(self) -> None:
@@ -160,11 +165,12 @@ class SkillIndexTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            with patch.object(gsi, "SKILLS_DIR", root), patch.object(
-                gsi, "SOURCES_PATH", root / "SOURCES.json"
+            with (
+                patch.object(gsi, "SKILLS_DIR", root),
+                patch.object(gsi, "SOURCES_PATH", root / "SOURCES.json"),
+                self.assertRaises(ValueError) as ctx,
             ):
-                with self.assertRaises(ValueError) as ctx:
-                    gsi.collect_records()
+                gsi.collect_records()
         self.assertIn("ghost", str(ctx.exception))
 
     def test_check_is_idempotent_after_generation(self) -> None:
