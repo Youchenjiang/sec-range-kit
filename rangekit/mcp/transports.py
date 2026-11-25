@@ -185,7 +185,7 @@ def resolve_probe_python(entry: dict, *, repo_root: Path, policy: dict | None = 
     return python
 
 
-def _secret_name(value: object, *, field: str, entry_name: str) -> str | None:
+def _var_name(value: object, *, field: str, entry_name: str) -> str | None:
     """Environment variable name a field points at, or ``None`` when it is a literal."""
     if not isinstance(value, dict):
         return None
@@ -202,22 +202,22 @@ def _field_value(
     *,
     field: str,
     entry_name: str,
-    secret_lookup=None,
+    var_lookup=None,
 ) -> str:
     """Text for one node field.
 
-    A ``{"secret": "NAME"}`` reference is resolved through ``secret_lookup``,
+    A ``{"secret": "NAME"}`` reference is resolved through ``var_lookup``,
     which is how node addressing reaches the wrapper's argv (``ssh`` needs the
     host and user as arguments) while the value itself is fetched from
     ``.env`` by the caller. Without a lookup - the describe/``mcp launch``
     path - the field renders as ``<NAME>`` so a plan is always printable and can
     never leak a value.
     """
-    name = _secret_name(value, field=field, entry_name=entry_name)
+    name = _var_name(value, field=field, entry_name=entry_name)
     if name is not None:
-        if secret_lookup is None:
+        if var_lookup is None:
             return f"<{name}>"
-        return str(secret_lookup(name))
+        return str(var_lookup(name))
     if isinstance(value, bool) or not isinstance(value, (str, int, float)):
         raise TransportError(
             f"{entry_name}: {field} must be a literal or {{\"secret\": \"NAME\"}}, got {value!r}"
@@ -230,7 +230,7 @@ def _field_value(
 
 def _int_field(block: dict, key: str, default: str, *, entry_name: str, field: str) -> str:
     raw = block.get(key, default)
-    if _secret_name(raw, field=field, entry_name=entry_name) is not None:
+    if _var_name(raw, field=field, entry_name=entry_name) is not None:
         raise TransportError(f"{entry_name}: {field} must be a literal, not a secret reference")
     text = _field_value(raw, field=field, entry_name=entry_name)
     try:
@@ -255,7 +255,7 @@ def _exec_block(node: dict, entry_name: str) -> dict:
     env: dict[str, str] = {}
     for key, value in raw_env.items():
         field = f"exec.env.{key}"
-        name = _secret_name(value, field=field, entry_name=entry_name)
+        name = _var_name(value, field=field, entry_name=entry_name)
         if name is not None:
             raise TransportError(
                 f"{entry_name}: {field} references secret {name!r}; secret values must not "
@@ -304,7 +304,7 @@ def _remote_script(exec_block: dict) -> str:
     return " && ".join(pieces)
 
 
-def _plan_ssh(entry_name: str, node: dict, exec_block: dict, *, which, secret_lookup) -> dict:
+def _plan_ssh(entry_name: str, node: dict, exec_block: dict, *, which, var_lookup) -> dict:
     conf = node.get("ssh")
     if not isinstance(conf, dict):
         raise TransportError(f"{entry_name}: transport 'ssh' needs a runner.node.ssh block")
@@ -312,16 +312,16 @@ def _plan_ssh(entry_name: str, node: dict, exec_block: dict, *, which, secret_lo
         if not conf.get(required):
             raise TransportError(f"{entry_name}: runner.node.ssh.{required} is required")
 
-    secret_names: list[str] = []
+    declared_vars: list[str] = []
     addresses: dict[str, str] = {}
     for field in ("host", "user"):
-        name = _secret_name(conf[field], field=f"ssh.{field}", entry_name=entry_name)
+        name = _var_name(conf[field], field=f"ssh.{field}", entry_name=entry_name)
         if name:
-            secret_names.append(name)
+            declared_vars.append(name)
         # The address is not a secret, but it is resolved here because ssh needs it
         # on its argument list; only ``password_secret`` is kept off argv.
         addresses[field] = _field_value(
-            conf[field], field=f"ssh.{field}", entry_name=entry_name, secret_lookup=secret_lookup
+            conf[field], field=f"ssh.{field}", entry_name=entry_name, var_lookup=var_lookup
         )
 
     port = _field_value(
@@ -346,12 +346,12 @@ def _plan_ssh(entry_name: str, node: dict, exec_block: dict, *, which, secret_lo
         command = _require_binary("sshpass", entry_name=entry_name, which=which)
         # sshpass reads the password from SSHPASS, so the value stays out of argv.
         args.extend(["-e", ssh_bin])
-        secret_names.append(password_name)
+        declared_vars.append(password_name)
         env["SSHPASS"] = _field_value(
             {"secret": password_name},
             field="ssh.password_secret",
             entry_name=entry_name,
-            secret_lookup=secret_lookup,
+            var_lookup=var_lookup,
         )
         notes.append("password auth via sshpass -e (value passed through SSHPASS)")
 
@@ -366,9 +366,9 @@ def _plan_ssh(entry_name: str, node: dict, exec_block: dict, *, which, secret_lo
         "args": args,
         "env": env,
         "path_prepend": str(Path(ssh_bin).parent),
-        "secret_names": secret_names,
-        "env_from_secrets": {},
-        "forwarded_secrets": [],
+        "declared_vars": declared_vars,
+        "env_from_vars": {},
+        "forwarded_vars": [],
         "notes": notes,
     }
 
@@ -404,18 +404,18 @@ def _container_mount(entry_name: str, mount, repo_root: Path) -> tuple[str, str]
     return f"{host_path}:{container_path}:{mode}", f"mount {host_rel} -> {container_path}:{mode}"
 
 
-def _container_secret_name(entry_name: str, name) -> str:
-    secret_name = str(name).strip()
-    if not _ENV_NAME_RE.fullmatch(secret_name):
+def _container_var_name(entry_name: str, name) -> str:
+    var_name = str(name).strip()
+    if not _ENV_NAME_RE.fullmatch(var_name):
         raise TransportError(
             f"{entry_name}: container.secrets entries must be environment variable names, "
             f"got {name!r}"
         )
-    return secret_name
+    return var_name
 
 
 def _plan_container(
-    entry_name: str, node: dict, exec_block: dict, *, repo_root: Path, which, secret_lookup
+    entry_name: str, node: dict, exec_block: dict, *, repo_root: Path, which, var_lookup
 ) -> dict:
     conf = node.get("container")
     if not isinstance(conf, dict) or not conf.get("image"):
@@ -449,22 +449,22 @@ def _plan_container(
     for key, value in sorted(exec_block["env"].items()):
         args.extend(["-e", f"{key}={value}"])
 
-    secret_names: list[str] = []
+    declared_vars: list[str] = []
     env: dict[str, str] = {}
     for name in conf.get("secrets") or []:
-        secret_name = _container_secret_name(entry_name, name)
+        var_name = _container_var_name(entry_name, name)
         # ``-e NAME`` (no value) forwards the variable from the docker client's
         # environment, so the value never appears in argv or the container's
         # process list; the value is placed in the wrapper's environment instead.
-        args.extend(["-e", secret_name])
-        secret_names.append(secret_name)
-        env[secret_name] = _field_value(
-            {"secret": secret_name},
-            field=f"container.secrets.{secret_name}",
+        args.extend(["-e", var_name])
+        declared_vars.append(var_name)
+        env[var_name] = _field_value(
+            {"secret": var_name},
+            field=f"container.secrets.{var_name}",
             entry_name=entry_name,
-            secret_lookup=secret_lookup,
+            var_lookup=var_lookup,
         )
-        notes.append(f"secret {secret_name} forwarded by name (-e {secret_name})")
+        notes.append(f"secret {var_name} forwarded by name (-e {var_name})")
 
     args.append(str(conf["image"]))
     args.extend([exec_block["command"], *exec_block["args"]])
@@ -475,9 +475,9 @@ def _plan_container(
         "args": args,
         "env": env,
         "path_prepend": str(Path(docker).parent),
-        "secret_names": secret_names,
-        "env_from_secrets": {},
-        "forwarded_secrets": list(secret_names),
+        "declared_vars": declared_vars,
+        "env_from_vars": {},
+        "forwarded_vars": list(declared_vars),
         "notes": notes,
     }
 
@@ -486,20 +486,20 @@ def _vmrun_credential_args(
     entry_name: str,
     field: str,
     value,
-    secret_names: list[str],
+    declared_vars: list[str],
     env: dict[str, str],
     *,
-    secret_lookup,
+    var_lookup,
 ) -> list[str]:
     """Bridge argv for one vmrun credential; a secret reference is passed by name only."""
-    name = _secret_name(value, field=f"vmrun.{field}", entry_name=entry_name)
+    name = _var_name(value, field=f"vmrun.{field}", entry_name=entry_name)
     if name:
-        secret_names.append(name)
+        declared_vars.append(name)
         env[name] = _field_value(
             value,
             field=f"vmrun.{field}",
             entry_name=entry_name,
-            secret_lookup=secret_lookup,
+            var_lookup=var_lookup,
         )
         return [f"--{field}-env", name]
     return [
@@ -525,7 +525,7 @@ def _plan_vmrun(
     probe_python: Path,
     vmrun_bridge: Path,
     guest_bridge: Path,
-    secret_lookup,
+    var_lookup,
 ) -> dict:
     conf = node.get("vmrun") or {}
     if not isinstance(conf, dict):
@@ -547,7 +547,7 @@ def _plan_vmrun(
 
     args: list[str] = [str(vmrun_bridge)]
     args.extend(["--vmrun", str(conf.get("vmrun") or DEFAULT_VMRUN)])
-    secret_names: list[str] = []
+    declared_vars: list[str] = []
     # Node credentials and the VMX path stay in the wrapper's environment (never on
     # argv, where the host's process list would expose them): the bridge reads the
     # named variables itself, and the guest never receives any of them.
@@ -555,7 +555,7 @@ def _plan_vmrun(
     for field, value in (("vmx", vmx), ("guest-user", guest_user), ("guest-password", guest_password)):
         args.extend(
             _vmrun_credential_args(
-                entry_name, field, value, secret_names, env, secret_lookup=secret_lookup
+                entry_name, field, value, declared_vars, env, var_lookup=var_lookup
             )
         )
 
@@ -602,9 +602,9 @@ def _plan_vmrun(
         "args": args,
         "env": env,
         "path_prepend": str(Path(probe_python).parent),
-        "secret_names": secret_names,
-        "env_from_secrets": {},
-        "forwarded_secrets": [],
+        "declared_vars": declared_vars,
+        "env_from_vars": {},
+        "forwarded_vars": [],
         "notes": [
             "VMware Guest Operations file bridge over VMCI (no guest TCP port)",
             "guest credentials never leave the host gateway process environment",
@@ -621,17 +621,17 @@ def plan_launch(
     guest_bridge: Path,
     vmrun_bridge: Path,
     which=shutil.which,
-    secret_lookup=None,
+    var_lookup=None,
 ) -> dict:
     """Build the launch plan for a node transport.
 
     Returns ``{'transport', 'command', 'args', 'env', 'path_prepend',
-    'secret_names', 'forwarded_secrets', 'notes'}``. ``command``/``args`` spawn a
-    stdio wrapper and ``env`` is the environment it needs; ``secret_names`` are the
-    variables the *wrapper* consumed, and ``forwarded_secrets`` lists the names (a
+    'declared_vars', 'forwarded_vars', 'notes'}``. ``command``/``args`` spawn a
+    stdio wrapper and ``env`` is the environment it needs; ``declared_vars`` are the
+    variables the *wrapper* consumed, and ``forwarded_vars`` lists the names (a
     subset) whose values cross into the node itself.
 
-    ``secret_lookup`` resolves a ``{"secret": "NAME"}`` reference (and is expected
+    ``var_lookup`` resolves a ``{"secret": "NAME"}`` reference (and is expected
     to raise for a missing name). Pass ``None`` for the describe path: fields then
     render as ``<NAME>``, so a plan is printable, loggable and value-free.
     """
@@ -650,7 +650,7 @@ def plan_launch(
     exec_block = _exec_block(node, entry_name)
 
     if transport == "ssh":
-        plan = _plan_ssh(entry_name, node, exec_block, which=which, secret_lookup=secret_lookup)
+        plan = _plan_ssh(entry_name, node, exec_block, which=which, var_lookup=var_lookup)
     elif transport == "container":
         plan = _plan_container(
             entry_name,
@@ -658,7 +658,7 @@ def plan_launch(
             exec_block,
             repo_root=Path(repo_root),
             which=which,
-            secret_lookup=secret_lookup,
+            var_lookup=var_lookup,
         )
     elif transport == "vmrun_guest":
         plan = _plan_vmrun(
@@ -668,15 +668,15 @@ def plan_launch(
             probe_python=Path(probe_python),
             vmrun_bridge=Path(vmrun_bridge),
             guest_bridge=Path(guest_bridge),
-            secret_lookup=secret_lookup,
+            var_lookup=var_lookup,
         )
     else:  # pragma: no cover - transport_for already validates the value
         raise TransportError(f"{entry_name}: unknown transport {transport!r}")
 
     plan["exec"] = exec_block
-    plan.setdefault("forwarded_secrets", [])
+    plan.setdefault("forwarded_vars", [])
     plan.setdefault("env", {})
-    plan.setdefault("env_from_secrets", {})
+    plan.setdefault("env_from_vars", {})
     plan["path_prepend"] = plan.get("path_prepend") or str(Path(plan["command"]).parent)
     return plan
 
@@ -694,5 +694,5 @@ def describe(plan: dict, *, repo_root: Path | None = None) -> str:
         return str(path)
 
     argv = " ".join(shlex.quote(_display(item) if os.path.isabs(item) else item) for item in plan["args"])
-    secrets = ",".join(plan["secret_names"]) or "-"
-    return f"transport={plan['transport']} command={_display(plan['command'])} secrets={secrets}\n  argv: {argv}"
+    names = ",".join(plan["declared_vars"]) or "-"
+    return f"transport={plan['transport']} command={_display(plan['command'])} vars={names}\n  argv: {argv}"

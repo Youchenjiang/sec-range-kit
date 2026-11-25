@@ -88,7 +88,7 @@ def get_server(registry: dict, name: str) -> dict:
 # --------------------------------------------------------------------------------
 
 
-def parse_secrets_env(text: str) -> dict[str, str]:
+def parse_env_file(text: str) -> dict[str, str]:
     """Parse a ``KEY=value`` secrets file into a mapping.
 
     Tolerates blank lines, ``#`` comments and an optional ``export`` prefix;
@@ -115,10 +115,10 @@ def parse_secrets_env(text: str) -> dict[str, str]:
     return secrets
 
 
-def declared_secret_names(entry: dict) -> list[str]:
+def declared_var_names(entry: dict) -> list[str]:
     """Environment variable names a server is allowed to receive.
 
-    ``secrets_binding.env`` is authoritative; the legacy ``.env`` block is
+    ``var_binding.env`` is authoritative; the legacy ``.env`` block is
     only consulted when no binding exists, so a stale note in the old field can
     never widen what a server receives. Only names are ever stored here.
     """
@@ -134,10 +134,10 @@ def declared_secret_names(entry: dict) -> list[str]:
     return sorted(name for name in names if re.fullmatch(r"[A-Za-z_]\w*", name, re.ASCII))
 
 
-def resolve_named_secrets(
+def resolve_named_vars(
     names: list[str],
     *,
-    secrets_file: Path | None = None,
+    env_file: Path | None = None,
     process_env: dict[str, str] | None = None,
 ) -> tuple[dict[str, str], list[str]]:
     """Return ``(values, missing_names)`` for an explicit list of variable names.
@@ -146,11 +146,11 @@ def resolve_named_secrets(
     variable of the same name. Names outside the list are never returned, so a
     caller (server or transport wrapper) cannot harvest unrelated credentials.
     """
-    path = Path(secrets_file) if secrets_file is not None else SECRETS_PATH
+    path = Path(env_file) if env_file is not None else SECRETS_PATH
     stored: dict[str, str] = {}
     if path.exists():
         try:
-            stored = parse_secrets_env(path.read_text(encoding="utf-8"))
+            stored = parse_env_file(path.read_text(encoding="utf-8"))
         except OSError:
             stored = {}
 
@@ -167,27 +167,27 @@ def resolve_named_secrets(
     return values, missing
 
 
-def resolve_secret_env(
+def resolve_declared_vars(
     entry: dict,
     *,
-    secrets_file: Path | None = None,
+    env_file: Path | None = None,
     process_env: dict[str, str] | None = None,
 ) -> tuple[dict[str, str], list[str]]:
     """Return ``(values, missing_names)`` for one server's declared names."""
-    return resolve_named_secrets(
-        declared_secret_names(entry), secrets_file=secrets_file, process_env=process_env
+    return resolve_named_vars(
+        declared_var_names(entry), env_file=env_file, process_env=process_env
     )
 
 
-def secrets_binding(entry: dict) -> dict:
+def var_binding(entry: dict) -> dict:
     """Normalise a server's secret contract (``required``/``inject``/names)."""
     block = entry.get("secrets_binding")
     if not isinstance(block, dict):
         block = entry.get("secrets") if isinstance(entry.get("secrets"), dict) else {}
     return {
         "required": bool(block.get("required")),
-        "inject": block.get("inject") or ("host-env" if declared_secret_names(entry) else "none"),
-        "env": declared_secret_names(entry),
+        "inject": block.get("inject") or ("host-env" if declared_var_names(entry) else "none"),
+        "env": declared_var_names(entry),
     }
 
 
@@ -588,7 +588,7 @@ def resolve_session_plan(
     registry: dict | None = None,
     *,
     execute: bool = True,
-    secrets_file: Path | None = None,
+    env_file: Path | None = None,
 ) -> dict:
     """Resolve how one registered server is launched, transport included.
 
@@ -616,9 +616,9 @@ def resolve_session_plan(
             "args": runner["args"],
             "env": runner["env"],
             "path_prepend": runner["path_prepend"],
-            "secret_names": declared_secret_names(entry),
-            "env_from_secrets": {},
-            "forwarded_secrets": [],
+            "declared_vars": declared_var_names(entry),
+            "env_from_vars": {},
+            "forwarded_vars": [],
             "notes": list(runner.get("notes") or []),
             "exec": {},
         }
@@ -629,17 +629,17 @@ def resolve_session_plan(
     name = entry.get("name", "?")
     resolved: dict[str, str] = {}
 
-    def lookup(secret_name: str) -> str:
+    def lookup(var_name: str) -> str:
         """Resolve one transport secret on demand, failing on the first missing one."""
-        if secret_name not in resolved:
-            values, missing = resolve_named_secrets([secret_name], secrets_file=secrets_file)
+        if var_name not in resolved:
+            values, missing = resolve_named_vars([var_name], env_file=env_file)
             if missing:
                 raise mcp_transports.TransportError(
-                    f"{name}: missing required secret env name {secret_name}; add it to "
+                    f"{name}: missing required secret env name {var_name}; add it to "
                     ".env (the registry records names, not values)"
                 )
-            resolved[secret_name] = values[secret_name]
-        return resolved[secret_name]
+            resolved[var_name] = values[var_name]
+        return resolved[var_name]
 
     plan = mcp_transports.plan_launch(
         entry,
@@ -648,7 +648,7 @@ def resolve_session_plan(
         probe_python=probe_python,
         guest_bridge=_policy_path(policy.get("guest_bridge"), NODE_BRIDGE_PATH),
         vmrun_bridge=_policy_path(policy.get("vmrun_bridge"), VMRUN_BRIDGE_PATH),
-        secret_lookup=lookup if execute else None,
+        var_lookup=lookup if execute else None,
     )
     plan["holder"] = holder
     plan["probe_python"] = str(probe_python)
@@ -686,17 +686,17 @@ def _parse_sections(stdout: str) -> dict:
     return decoded
 
 
-def _session_secrets(server: str, entry: dict, transport: str, plan: dict) -> dict[str, str]:
+def _session_vars(server: str, entry: dict, transport: str, plan: dict) -> dict[str, str]:
     """Secret values injected into the probe child (always empty for node transports)."""
-    binding = secrets_binding(entry)
+    binding = var_binding(entry)
     if transport != "stdio_local":
         # Node transports run the wrapper on the host gateway only; the server's
         # own declared secrets would have to cross the node boundary, which is
         # exactly what the placement rules forbid. Transport secrets (node
         # addressing, guest credentials) were already resolved into ``plan.env``
         # by the planner, and a missing one failed the plan.
-        forwarded = set(plan.get("forwarded_secrets") or [])
-        blocked = sorted(set(declared_secret_names(entry)) - forwarded)
+        forwarded = set(plan.get("forwarded_vars") or [])
+        blocked = sorted(set(declared_var_names(entry)) - forwarded)
         if blocked:
             raise ValueError(
                 f"{server}: secrets {', '.join(blocked)} cannot reach a {transport} node; "
@@ -704,16 +704,16 @@ def _session_secrets(server: str, entry: dict, transport: str, plan: dict) -> di
                 "runner.node.container.secrets to forward it explicitly"
             )
         return {}
-    secrets, missing = resolve_named_secrets(plan["secret_names"])
+    secrets, missing = resolve_named_vars(plan["declared_vars"])
     if missing and binding["required"]:
         raise ValueError(
             f"{server}: missing required secret env names {', '.join(missing)}; "
             "add them to .env (the registry records names only)"
         )
-    # ``env_from_secrets`` renames a declared secret onto the variable its
+    # ``env_from_vars`` renames a declared secret onto the variable its
     # wrapper expects; values never live in the plan.
     return {
-        plan["env_from_secrets"].get(name, name): value for name, value in secrets.items()
+        plan["env_from_vars"].get(name, name): value for name, value in secrets.items()
     }
 
 
@@ -806,7 +806,7 @@ def run_session(
         node=holder,
     )
     plan = resolve_session_plan(entry, registry)
-    injected = _session_secrets(server, entry, transport, plan)
+    injected = _session_vars(server, entry, transport, plan)
     proc = _run_probe(server, plan, _probe_command(plan, call, arguments), injected)
     sections = _parse_sections(proc.stdout or "")
     _require_session_sections(server, call, proc, sections)
@@ -939,8 +939,8 @@ _LAUNCH_JSON_KEYS = (
     "command",
     "args",
     "path_prepend",
-    "secret_names",
-    "forwarded_secrets",
+    "declared_vars",
+    "forwarded_vars",
     "notes",
 )
 
@@ -958,8 +958,8 @@ def _print_launch_plan(server: str, plan: dict) -> None:
         + mcp_transports.describe(plan, repo_root=protocol.REPO_ROOT)
     )
     print(f"  probe: {plan['probe_python']}")
-    if plan["forwarded_secrets"]:
-        print(f"  forwarded into node: {', '.join(plan['forwarded_secrets'])}")
+    if plan["forwarded_vars"]:
+        print(f"  forwarded into node: {', '.join(plan['forwarded_vars'])}")
     elif plan["transport"] != "stdio_local":
         print("  forwarded into node: (none - node transports carry no secret values)")
     for note in plan.get("notes") or []:
@@ -1020,8 +1020,8 @@ def command_secrets(args: argparse.Namespace) -> int:
     """
     registry = load_registry()
     entry = get_server(registry, args.server)
-    binding = secrets_binding(entry)
-    values, _missing = resolve_secret_env(entry)
+    binding = var_binding(entry)
+    values, _missing = resolve_declared_vars(entry)
     print(
         f"{args.server} required={binding['required']} inject={binding['inject']} "
         f"declared={len(binding['env'])}"

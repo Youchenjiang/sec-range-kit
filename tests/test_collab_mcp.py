@@ -415,7 +415,7 @@ class McpAuthorizationGateTests(unittest.TestCase):
 
 class McpSecretsTests(unittest.TestCase):
     def test_parse_secrets_env_handles_comments_quotes_and_export(self) -> None:
-        parsed = collab_mcp.parse_secrets_env(
+        parsed = collab_mcp.parse_env_file(
             "# comment\n\nNVD_API_KEY=abc123\nexport GITHUB_TOKEN='ghp_x'\n"
             'SHODAN_KEY="shodan$literal"\nnot-a-line\n'
         )
@@ -426,16 +426,16 @@ class McpSecretsTests(unittest.TestCase):
 
     def test_resolve_secret_env_only_returns_declared_names(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            secrets_file = Path(tmp) / ".env"
-            secrets_file.write_text(
+            env_file = Path(tmp) / ".env"
+            env_file.write_text(
                 "DECLARED_KEY=value\nOTHER_SERVER_KEY=secret\n", encoding="utf-8"
             )
             entry = {
                 "name": "gated",
                 "secrets_binding": {"required": False, "env": ["DECLARED_KEY"]},
             }
-            values, missing = collab_mcp.resolve_secret_env(
-                entry, secrets_file=secrets_file, process_env={}
+            values, missing = collab_mcp.resolve_declared_vars(
+                entry, env_file=env_file, process_env={}
             )
         self.assertEqual(values, {"DECLARED_KEY": "value"})
         self.assertNotIn("OTHER_SERVER_KEY", values)
@@ -443,13 +443,13 @@ class McpSecretsTests(unittest.TestCase):
 
     def test_resolve_secret_env_reports_missing_and_falls_back_to_process_env(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            secrets_file = Path(tmp) / "absent-.env"
+            env_file = Path(tmp) / "absent-.env"
             entry = {
                 "name": "gated",
                 "secrets_binding": {"required": False, "env": ["FROM_ENV", "ABSENT"]},
             }
-            values, missing = collab_mcp.resolve_secret_env(
-                entry, secrets_file=secrets_file, process_env={"FROM_ENV": "set"}
+            values, missing = collab_mcp.resolve_declared_vars(
+                entry, env_file=env_file, process_env={"FROM_ENV": "set"}
             )
         self.assertEqual(values, {"FROM_ENV": "set"})
         self.assertEqual(missing, ["ABSENT"])
@@ -460,14 +460,14 @@ class McpSecretsTests(unittest.TestCase):
             "secrets_binding": {"env": ["NEW_NAME"]},
             "secrets": {"env": ["OLD_NAME (deprecated note)"]},
         }
-        self.assertEqual(collab_mcp.declared_secret_names(entry), ["NEW_NAME"])
+        self.assertEqual(collab_mcp.declared_var_names(entry), ["NEW_NAME"])
 
-    def test_secrets_binding_reports_injection_mode(self) -> None:
+    def test_var_binding_reports_injection_mode(self) -> None:
         self.assertEqual(
-            collab_mcp.secrets_binding({"name": "x"})["inject"], "none"
+            collab_mcp.var_binding({"name": "x"})["inject"], "none"
         )
         self.assertEqual(
-            collab_mcp.secrets_binding(
+            collab_mcp.var_binding(
                 {"name": "x", "secrets_binding": {"env": ["T"]}}
             )["inject"],
             "host-env",

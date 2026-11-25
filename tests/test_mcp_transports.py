@@ -210,8 +210,8 @@ class SshPlanTests(unittest.TestCase):
     def test_plan_targets_ssh_with_holder_addressing_and_batchmode(self) -> None:
         plan = self.plan()
         self.assertEqual(plan["command"], "/usr/bin/ssh")
-        self.assertEqual(plan["secret_names"], ["KALI_HOST", "KALI_USER"])
-        self.assertEqual(plan["forwarded_secrets"], [])
+        self.assertEqual(plan["declared_vars"], ["KALI_HOST", "KALI_USER"])
+        self.assertEqual(plan["forwarded_vars"], [])
         self.assertIn("-o", plan["args"])
         self.assertIn("BatchMode=yes", plan["args"])
         self.assertEqual(plan["args"][-2].count("@"), 1)
@@ -291,7 +291,7 @@ class SshPlanTests(unittest.TestCase):
         )
         self.assertEqual(plan["command"], "/usr/bin/sshpass")
         self.assertEqual(plan["args"][:2], ["-e", "/usr/bin/ssh"])
-        self.assertIn("KALI_PASSWORD", plan["secret_names"])
+        self.assertIn("KALI_PASSWORD", plan["declared_vars"])
         # Describe mode renders the value as a placeholder: nothing leaks.
         self.assertEqual(plan["env"], {"SSHPASS": "<KALI_PASSWORD>"})
         self.assertNotIn("KALI_PASSWORD", " ".join(plan["args"]))
@@ -305,7 +305,7 @@ class SshPlanTests(unittest.TestCase):
             guest_bridge=NODE_BRIDGE,
             vmrun_bridge=VMRUN_BRIDGE,
             which=fake_which({"ssh": "/usr/bin/ssh", "sshpass": "/usr/bin/sshpass"}),
-            secret_lookup=lambda name: {
+            var_lookup=lambda name: {
                 "KALI_HOST": "10.0.0.5",
                 "KALI_USER": "analyst",
                 "KALI_PASSWORD": "hunter2",
@@ -344,7 +344,7 @@ class ContainerPlanTests(unittest.TestCase):
         self.assertEqual(
             plan["args"][-4:], ["python:3.12-alpine", "python3", "/work/scan.py", "--stdio"]
         )
-        self.assertEqual(plan["forwarded_secrets"], [])
+        self.assertEqual(plan["forwarded_vars"], [])
 
     def test_mounts_may_not_escape_the_repository(self) -> None:
         for host in ("/tmp", "C:/Users", "../outside"):
@@ -368,8 +368,8 @@ class ContainerPlanTests(unittest.TestCase):
         plan = self.plan(container_entry(secrets=["SEMGREP_APP_TOKEN"]))
         self.assertIn("-e", plan["args"])
         self.assertIn("SEMGREP_APP_TOKEN", plan["args"])
-        self.assertEqual(plan["secret_names"], ["SEMGREP_APP_TOKEN"])
-        self.assertEqual(plan["forwarded_secrets"], ["SEMGREP_APP_TOKEN"])
+        self.assertEqual(plan["declared_vars"], ["SEMGREP_APP_TOKEN"])
+        self.assertEqual(plan["forwarded_vars"], ["SEMGREP_APP_TOKEN"])
         self.assertNotIn("=", plan["args"][plan["args"].index("SEMGREP_APP_TOKEN")])
 
     def test_secret_names_are_validated(self) -> None:
@@ -415,17 +415,17 @@ class VmrunPlanTests(unittest.TestCase):
         self.assertEqual(plan["command"], sys.executable)
         self.assertEqual(plan["args"][0], str(VMRUN_BRIDGE))
         self.assertEqual(
-            plan["secret_names"], ["FLARE_VMX", "VM_GU", "VM_GP"]
+            plan["declared_vars"], ["FLARE_VMX", "VM_GU", "VM_GP"]
         )
         self.assertIn("--vmx-env", plan["args"])
         self.assertIn("--guest-user-env", plan["args"])
         self.assertIn("--guest-password-env", plan["args"])
-        self.assertEqual(plan["forwarded_secrets"], [])
+        self.assertEqual(plan["forwarded_vars"], [])
         self.assertIn(json.dumps([r"C:\Tools\DFIR\parser.exe", "--stdio"]), plan["args"])
 
     def test_literal_vmx_is_accepted_and_keeps_credentials_from_the_environment(self) -> None:
         plan = self.plan(self.entry(vmx=r"C:\VMs\FLARE-VM\FLARE-VM.vmx"))
-        self.assertNotIn("FLARE_VMX", plan["secret_names"])
+        self.assertNotIn("FLARE_VMX", plan["declared_vars"])
         self.assertIn(r"C:\VMs\FLARE-VM\FLARE-VM.vmx", plan["args"])
 
     def test_missing_bridge_scripts_are_reported(self) -> None:
@@ -765,7 +765,7 @@ class CollabIntegrationTests(unittest.TestCase):
                 with patch.dict(os.environ, {"SEMGREP_APP_TOKEN": "token-value"}):
                     plan = collab_mcp.resolve_session_plan(entry, registry)
                 self.assertEqual(plan["transport"], "container")
-                self.assertEqual(plan["forwarded_secrets"], ["SEMGREP_APP_TOKEN"])
+                self.assertEqual(plan["forwarded_vars"], ["SEMGREP_APP_TOKEN"])
                 # Forwarded by name only; the value rides in the docker client env.
                 self.assertIn("SEMGREP_APP_TOKEN", plan["args"])
                 self.assertNotIn("token-value", " ".join(plan["args"]))
