@@ -356,35 +356,51 @@ def _guest_access(args: argparse.Namespace) -> tuple[str, str, str]:
     return vmx, user, password
 
 
-def _relay(bridge: "FileBridge", sink: "queue.Queue[str | None]", args: argparse.Namespace) -> int:
+def _next_client_line(sink: "queue.Queue[str | None]", poll_interval: float, stdin_open: bool) -> str | None:
+    """One client line, ``""`` when none arrived in time, ``None`` once the client closed stdin."""
+    if not stdin_open:
+        return ""
+    try:
+        return sink.get(timeout=poll_interval)
+    except queue.Empty:
+        return ""
+
+
+def _forward_guest_output(bridge: "FileBridge") -> bool:
+    """Copy new guest lines to stdout; True once the guest announced its shutdown."""
+    for out_line in bridge.poll():
+        if out_line.strip() == SHUTDOWN_SENTINEL:
+            return True
+        sys.stdout.write(out_line + "\n")
+        sys.stdout.flush()
+    return False
+
+
+def _drained(bridge: "FileBridge", args: argparse.Namespace, eof_at: float | None) -> bool:
+    """After EOF, True once the guest stayed quiet for ``--drain`` or the response timeout passed.
+
+    The quiet timer starts at EOF, never before it - a session's own staging time
+    must not be mistaken for guest silence (that mistake drops the last replies).
+    """
+    if eof_at is None:
+        return False
+    idle = time.monotonic() - max(bridge.last_output, eof_at)
+    return idle > float(args.drain) or time.monotonic() - eof_at > float(args.response_timeout)
+
+
+def _relay(bridge: "FileBridge", sink: "queue.Queue[str | None]", args: argparse.Namespace) -> None:
     """Pump client lines to the guest and guest lines to stdout until the session ends."""
     stdin_open = True
     eof_at: float | None = None
     while True:
-        line: str | None = ""
-        if stdin_open:
-            try:
-                line = sink.get(timeout=bridge.poll_interval)
-            except queue.Empty:
-                line = ""
+        line = _next_client_line(sink, bridge.poll_interval, stdin_open)
         if line is None:
             stdin_open = False
             eof_at = time.monotonic()
         elif line.strip():
             bridge.send(line)
-        for out_line in bridge.poll():
-            if out_line.strip() == SHUTDOWN_SENTINEL:
-                return 0
-            sys.stdout.write(out_line + "\n")
-            sys.stdout.flush()
-        if eof_at is not None:
-            # Drain: after the client closes stdin, keep polling until the guest
-            # has been quiet for ``--drain`` seconds. The quiet timer starts at
-            # EOF, never before it - a session's own staging time must not be
-            # mistaken for guest silence (that mistake drops the last replies).
-            idle = time.monotonic() - max(bridge.last_output, eof_at)
-            if idle > float(args.drain) or time.monotonic() - eof_at > float(args.response_timeout):
-                return 0
+        if _forward_guest_output(bridge) or _drained(bridge, args, eof_at):
+            return
 
 
 def run_bridge(args: argparse.Namespace) -> int:
@@ -413,7 +429,8 @@ def run_bridge(args: argparse.Namespace) -> int:
 
     try:
         bridge.start()
-        return _relay(bridge, sink, args)
+        _relay(bridge, sink, args)
+        return 0
     except BridgeError as exc:
         tail = bridge.stderr_tail()
         detail = f"\n--- guest bridge log tail ---\n{tail}" if tail else ""
