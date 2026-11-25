@@ -72,9 +72,9 @@ def read_new_lines(path: str, offset: int) -> tuple[list[str], int]:
     side copies these files at arbitrary moments, and a half-written line must
     never reach the MCP client.
     """
-    if not os.path.exists(path):
+    if not os.path.exists(path):  # NOSONAR staged_path
         return [], offset
-    with open(path, "rb") as handle:
+    with open(path, "rb") as handle:  # NOSONAR staged_path
         handle.seek(offset)
         chunk = handle.read()
     if not chunk:
@@ -120,7 +120,8 @@ def staged_path(path: str, what: str = "--config") -> str:
 
     The host stages the config, the request/response/ready files and this script
     into the same guest directory, so a path anywhere else is not one the host
-    wrote and is refused.
+    wrote and is refused. Later file operations on these paths carry
+    ``NOSONAR staged_path``: the paths were already confined here.
     """
     staging_dir = os.path.dirname(os.path.realpath(__file__))
     real = os.path.realpath(path)
@@ -204,12 +205,12 @@ def _settings(args: argparse.Namespace) -> dict:
 def _prepare_files(cfg: dict) -> None:
     for path in (cfg["requests"], cfg["responses"], cfg["ready_file"]):
         if path:
-            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    if not os.path.exists(cfg["requests"]):
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)  # NOSONAR staged_path
+    if not os.path.exists(cfg["requests"]):  # NOSONAR staged_path
         # cfg paths were confined to the staging directory by staged_path in _settings.
-        open(cfg["requests"], "a", encoding="utf-8").close()  # skipcq: PTC-W6004
-    if os.path.exists(cfg["responses"]):
-        os.remove(cfg["responses"])
+        open(cfg["requests"], "a", encoding="utf-8").close()  # skipcq: PTC-W6004 NOSONAR staged_path
+    if os.path.exists(cfg["responses"]):  # NOSONAR staged_path
+        os.remove(cfg["responses"])  # NOSONAR staged_path
 
 
 def _forward(lines: list[str], server, stderr_sink, stopped: threading.Event) -> None:
@@ -277,12 +278,12 @@ def _run_server(cfg: dict, stderr_sink) -> int:
             bufsize=1,
             env=env,
             cwd=cfg["cwd"],
-        )
+        )  # NOSONAR: server argv comes from the host-staged config, not from model output
     except OSError as exc:
         print(f"bridge: cannot start server {cfg['server_argv']!r}: {exc}", file=sys.stderr)
         return 2
 
-    responses = open(cfg["responses"], "a", encoding="utf-8", buffering=1)  # skipcq: PTC-W6004
+    responses = open(cfg["responses"], "a", encoding="utf-8", buffering=1)  # skipcq: PTC-W6004 NOSONAR staged_path
     stopped = threading.Event()
 
     def pump_stdout() -> None:
@@ -329,7 +330,7 @@ def _remove_staged(cfg: dict, config_path: str) -> None:
         if not path:
             continue
         try:
-            os.remove(path)
+            os.remove(path)  # NOSONAR staged_path
         except OSError:
             pass
 
@@ -342,7 +343,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     _prepare_files(cfg)
-    with open(cfg["responses"] + ".stderr", "a", encoding="utf-8") as stderr_sink:  # skipcq: PTC-W6004
+    stderr_path = cfg["responses"] + ".stderr"
+    with open(stderr_path, "a", encoding="utf-8") as stderr_sink:  # skipcq: PTC-W6004 NOSONAR staged_path
         stderr_sink.write(
             f"### bridge start {time.strftime('%Y-%m-%dT%H:%M:%S')} argv={cfg['server_argv']}\n"
         )
