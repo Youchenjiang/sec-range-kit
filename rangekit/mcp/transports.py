@@ -41,7 +41,7 @@ import os
 import re
 import shlex
 import shutil
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 #: Transports a registry entry may declare.
 NODE_TRANSPORTS = ("stdio_local", "ssh", "container", "vmrun_guest")
@@ -381,11 +381,14 @@ def _container_mount(entry_name: str, mount, repo_root: Path) -> tuple[str, str]
         )
     host_rel = str(mount["host"])
     host_path = Path(host_rel)
+    # A drive-qualified path (C:/...) is not absolute on POSIX and would otherwise
+    # be joined onto the repository; it never names a path inside the repository.
+    foreign_drive = bool(PureWindowsPath(host_rel).drive) and not host_path.is_absolute()
     if not host_path.is_absolute():
         host_path = repo_root / host_path
     host_path = host_path.resolve()
     root = Path(repo_root).resolve()
-    if host_path != root and root not in host_path.parents:
+    if foreign_drive or (host_path != root and root not in host_path.parents):
         raise TransportError(
             f"{entry_name}: refusing to mount {host_rel!r} outside the repository "
             f"({repo_root}); nodes never receive the home directory or the filesystem root"
