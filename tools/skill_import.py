@@ -490,36 +490,38 @@ def build_plans(
     for spec in rules["sources"]:
         if only and spec["id"] not in only:
             continue
-        sid = spec["id"]
-        prior = recorded.get(sid) or {}
-        plan = SourcePlan(spec=spec, repo=None, skills={}, recorded=prior)
-        if spec["select"]["kind"] == "in_repo":
-            plan.skills, _ = derive_selection(spec, None, {})
-            plans.append(plan)
-            continue
-        if not need_upstream:
-            plan.skills = {name: SkillRef(name=name) for name in prior.get("skills", [])}
-            plans.append(plan)
-            continue
-        candidates = snapshot_candidates(spec, snapshot_root, repo_root)
-        repo = next((path for path in candidates if path.is_dir()), None)
-        if repo is None:
-            tried = ", ".join(str(path) for path in candidates)
-            raise RuleError(
-                f"{sid}: snapshot not found (tried {tried}); pass --snapshot-root, fetch "
-                "the snapshot, or use --local-only"
-            )
-        assert_pin_present(repo, spec["commit"])
-        selections, universe = derive_selection(spec, repo, upstream_tree(repo, spec["commit"]))
-        plan.repo = repo
-        plan.skills = selections
-        plan.universe = universe
-        plans.append(plan)
+        prior = recorded.get(spec["id"]) or {}
+        plans.append(_plan_source(spec, prior, repo_root, snapshot_root, need_upstream))
     if only:
         unknown = sorted(set(only) - {p.spec["id"] for p in plans})
         if unknown:
             raise RuleError(f"--source: unknown source id(s) {', '.join(unknown)}")
     return plans
+
+
+def _plan_source(
+    spec: dict, prior: dict, repo_root: Path, snapshot_root: Path | None, need_upstream: bool
+) -> SourcePlan:
+    """Plan one source: in-repo, recorded-only (no snapshot needed) or from its upstream snapshot."""
+    plan = SourcePlan(spec=spec, repo=None, skills={}, recorded=prior)
+    if spec["select"]["kind"] == "in_repo":
+        plan.skills, _ = derive_selection(spec, None, {})
+        return plan
+    if not need_upstream:
+        plan.skills = {name: SkillRef(name=name) for name in prior.get("skills", [])}
+        return plan
+    candidates = snapshot_candidates(spec, snapshot_root, repo_root)
+    repo = next((path for path in candidates if path.is_dir()), None)
+    if repo is None:
+        tried = ", ".join(str(path) for path in candidates)
+        raise RuleError(
+            f"{spec['id']}: snapshot not found (tried {tried}); pass --snapshot-root, fetch "
+            "the snapshot, or use --local-only"
+        )
+    assert_pin_present(repo, spec["commit"])
+    plan.repo = repo
+    plan.skills, plan.universe = derive_selection(spec, repo, upstream_tree(repo, spec["commit"]))
+    return plan
 
 
 # --------------------------------------------------------------- destination

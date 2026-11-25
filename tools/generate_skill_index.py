@@ -130,7 +130,13 @@ def collect_records() -> list[dict]:
         if path.parent.is_dir()
     )
 
-    sources = load_sources()["sources"]
+    attribution = _attribution(load_sources()["sources"])
+    _check_coverage(skills, attribution)
+    return [_record(name, attribution[name]) for name in skills]
+
+
+def _attribution(sources: list[dict]) -> dict[str, dict]:
+    """Map each skill to the one source that claims it."""
     attribution: dict[str, dict] = {}
     for source in sources:
         for skill in source.get("skills", []):
@@ -140,7 +146,11 @@ def collect_records() -> list[dict]:
                     f"{attribution[skill].get('id')!r} and {source.get('id')!r}"
                 )
             attribution[skill] = source
+    return attribution
 
+
+def _check_coverage(skills: list[str], attribution: dict[str, dict]) -> None:
+    """Every skill on disk is attributed, and every attributed skill is on disk."""
     unknown = [name for name in skills if name not in attribution]
     if unknown:
         raise ValueError(
@@ -153,24 +163,20 @@ def collect_records() -> list[dict]:
             f"skills/: {', '.join(sorted(stale))}"
         )
 
-    records = []
-    for name in skills:
-        skill_path = SKILLS_DIR / name / "SKILL.md"
-        frontmatter = parse_frontmatter(skill_path)
-        declared = frontmatter.get("license", "").strip()
-        source = attribution[name]
-        records.append(
-            {
-                "name": frontmatter.get("name") or name,
-                "directory": name,
-                "description": " ".join(frontmatter.get("description", "").split()),
-                "license": declared or source.get("license") or "Not specified",
-                "license_origin": "frontmatter" if declared else "source",
-                "source": source.get("label") or source.get("id") or "unknown",
-                "path": skill_path.relative_to(REPO_ROOT).as_posix(),
-            }
-        )
-    return records
+
+def _record(name: str, source: dict) -> dict:
+    skill_path = SKILLS_DIR / name / "SKILL.md"
+    frontmatter = parse_frontmatter(skill_path)
+    declared = frontmatter.get("license", "").strip()
+    return {
+        "name": frontmatter.get("name") or name,
+        "directory": name,
+        "description": " ".join(frontmatter.get("description", "").split()),
+        "license": declared or source.get("license") or "Not specified",
+        "license_origin": "frontmatter" if declared else "source",
+        "source": source.get("label") or source.get("id") or "unknown",
+        "path": skill_path.relative_to(REPO_ROOT).as_posix(),
+    }
 
 
 def _cell(text: str) -> str:
