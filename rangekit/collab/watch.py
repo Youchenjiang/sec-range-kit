@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -78,18 +79,27 @@ def beep() -> None:
     sys.stdout.flush()
 
 
+def _clipboard_command() -> tuple[list[str], str] | None:
+    """Clipboard tool for this platform, resolved to a full path, plus its input encoding."""
+    if sys.platform == "win32":
+        name, extra, encoding = "clip", [], "utf-16"
+    elif sys.platform == "darwin":
+        name, extra, encoding = "pbcopy", [], "utf-8"
+    elif sys.platform.startswith("linux"):
+        name, extra, encoding = "xclip", ["-selection", "clipboard"], "utf-8"
+    else:
+        return None
+    executable = shutil.which(name)
+    return ([executable, *extra], encoding) if executable else None
+
+
 def copy_to_clipboard(text: str) -> None:
+    command = _clipboard_command()
+    if command is None:
+        return
+    argv, encoding = command
     try:
-        if sys.platform == "win32":
-            subprocess.run(["clip"], input=text.encode("utf-16"), check=True)
-        elif sys.platform == "darwin":
-            subprocess.run(["pbcopy"], input=text.encode("utf-8"), check=True)
-        elif sys.platform.startswith("linux"):
-            subprocess.run(
-                ["xclip", "-selection", "clipboard"],
-                input=text.encode("utf-8"),
-                check=True,
-            )
+        subprocess.run(argv, input=text.encode(encoding), check=True)
     except (OSError, subprocess.SubprocessError):
         pass
 
