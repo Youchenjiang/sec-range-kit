@@ -61,10 +61,41 @@ class RuleError(Exception):
 # --------------------------------------------------------------------- git glue
 
 
+_GIT_SUBCOMMANDS = {"ls-tree", "cat-file", "rev-parse", "rev-list", "hash-object", "ls-files", "check-ignore"}
+_GIT_FLAGS = {"-r", "-z", "-e", "-v", "--count", "--error-unmatch", "--"}
+_GIT_REVISION = re.compile(r"^(HEAD|[0-9a-f]{7,40})(\^\{commit\}|\.\.HEAD)?$")
+
+
+def _git_argv(repo: Path, args: tuple[str, ...]) -> list[str]:
+    """Full git argv after checking every argument against what this tool sends.
+
+    Revisions come from the import rules, so each argument must be a known
+    subcommand or flag, a revision, the blob type, or a relative path after ``--``.
+    """
+    git = shutil.which("git")
+    if not git:
+        raise RuleError("git is not installed")
+    if not args or args[0] not in _GIT_SUBCOMMANDS:
+        raise RuleError(f"git subcommand not allowed: {args[:1]}")
+    after_separator = False
+    for arg in args[1:]:
+        if after_separator:
+            if arg.startswith("-") or Path(arg).is_absolute():
+                raise RuleError(f"git path argument not allowed: {arg!r}")
+        elif arg == "--":
+            after_separator = True
+        elif arg not in _GIT_FLAGS and arg != "blob" and not _GIT_REVISION.fullmatch(arg):
+            raise RuleError(f"git argument not allowed: {arg!r}")
+    return [git, "-C", str(repo), *args]
+
+
+def _run_git(repo: Path, args: tuple[str, ...], data: bytes | None = None) -> subprocess.CompletedProcess:
+    argv = _git_argv(repo, args)
+    return subprocess.run(argv, input=data, capture_output=True, check=False)  # NOSONAR argv checked by _git_argv
+
+
 def _git(repo: Path, *args: str, data: bytes | None = None) -> bytes:
-    proc = subprocess.run(
-        ["git", "-C", str(repo), *args], input=data, capture_output=True
-    )
+    proc = _run_git(repo, args, data)
     if proc.returncode != 0:
         raise RuleError(
             f"git -C {repo} {' '.join(args)} failed: "
@@ -74,12 +105,13 @@ def _git(repo: Path, *args: str, data: bytes | None = None) -> bytes:
 
 
 def _git_ok(repo: Path, *args: str) -> bool:
-    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True).returncode == 0
+    return _run_git(repo, args).returncode == 0
 
 
 def blob_sha1(content: bytes) -> str:
     """Git blob id of in-memory content (as the object store would store it)."""
-    return hashlib.sha1(b"blob %d\0" % len(content) + content).hexdigest()
+    # Git object ids are SHA-1 by definition: an identifier, not a security hash.
+    return hashlib.sha1(b"blob %d\0" % len(content) + content, usedforsecurity=False).hexdigest()
 
 
 def upstream_tree(repo: Path, commit: str) -> dict[str, str]:
@@ -117,10 +149,7 @@ def snapshot_head(repo: Path) -> str:
 
 def head_delta(repo: Path, commit: str) -> int | None:
     """How many commits the snapshot HEAD is ahead of the pin (None if unrelated)."""
-    proc = subprocess.run(
-        ["git", "-C", str(repo), "rev-list", "--count", f"{commit}..HEAD"],
-        capture_output=True,
-    )
+    proc = _run_git(repo, ("rev-list", "--count", f"{commit}..HEAD"))
     if proc.returncode != 0:
         return None
     return int(proc.stdout.decode().strip())
@@ -140,10 +169,7 @@ def is_tracked(repo_root: Path, path: Path) -> bool:
 def ignore_rule(repo_root: Path, path: Path) -> str | None:
     """The ``.gitignore`` entry hiding ``path``, for actionable messages."""
     rel = path.relative_to(repo_root).as_posix()
-    proc = subprocess.run(
-        ["git", "-C", str(repo_root), "check-ignore", "-v", "--", rel],
-        capture_output=True,
-    )
+    proc = _run_git(repo_root, ("check-ignore", "-v", "--", rel))
     if proc.returncode != 0:
         return None
     return proc.stdout.decode("utf-8", "replace").strip()

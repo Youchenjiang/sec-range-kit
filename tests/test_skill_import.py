@@ -566,5 +566,35 @@ class RealWorkspaceTests(unittest.TestCase):
         return code, stdout.getvalue(), stderr.getvalue()
 
 
+class GitArgvTests(unittest.TestCase):
+    """Every git call goes through an allowlist of subcommands, flags and revisions."""
+
+    def test_the_calls_this_tool_makes_are_allowed(self):
+        for args in (
+            ("ls-tree", "-r", "-z", "0123abcd"),
+            ("cat-file", "blob", "0123456789abcdef0123456789abcdef01234567"),
+            ("cat-file", "-e", "0123abcd^{commit}"),
+            ("rev-parse", "HEAD"),
+            ("rev-list", "--count", "0123abcd..HEAD"),
+            ("hash-object", "--", "skills/a/SKILL.md"),
+            ("check-ignore", "-v", "--", "skills/a/SKILL.md"),
+        ):
+            with self.subTest(args=args):
+                argv = si._git_argv(Path("."), args)
+                self.assertEqual(list(args), argv[3:])
+
+    def test_unexpected_arguments_are_refused(self):
+        for args in (
+            ("push", "origin"),
+            ("ls-tree", "--output=/tmp/x", "HEAD"),
+            ("rev-list", "--count", "main..HEAD"),
+            ("hash-object", "--", "--stdin"),
+            ("hash-object", "--", str(Path(__file__).resolve())),
+            (),
+        ):
+            with self.subTest(args=args), self.assertRaises(si.RuleError):
+                si._git_argv(Path("."), args)
+
+
 if __name__ == "__main__":
     unittest.main()
