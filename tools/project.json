@@ -34,5 +34,10 @@
     "strategy": "github-tag",
     "versionFile": "VERSION",
     "syncFiles": []
+  },
+  "hygiene": {
+    "allowedRootDirs": [
+      "rangekit"
+    ]
   }
 }
