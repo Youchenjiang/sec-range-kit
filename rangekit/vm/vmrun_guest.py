@@ -263,9 +263,12 @@ def load_creds_file(path, repo_root):
         inside_repo = real == root or real.startswith(root + os.sep)
     if inside_repo:
         rel = os.path.relpath(real, root)
+        git = shutil.which("git")
+        if not git:
+            raise VMError("找不到 git，無法確認 repo 內憑證檔是否被 Git ignore")
         try:
             check = subprocess.run(
-                ["git", "-C", root, "check-ignore", "--quiet", "--", rel],
+                [git, "-C", root, "check-ignore", "--quiet", "--", rel],
                 capture_output=True,
                 text=True,
                 timeout=10,

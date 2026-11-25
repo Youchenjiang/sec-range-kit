@@ -47,6 +47,13 @@ class CredsFileTests(unittest.TestCase):
         creds = vmrun_guest.load_creds_file(str(path), str(self.repo))
         self.assertEqual({"VM_GU": "analyst", "VM_GP": "placeholder"}, creds)
 
+    def test_missing_git_is_refused_instead_of_guessed(self):
+        path = self.repo / ".env"
+        path.write_text("VM_GU=analyst\n", encoding="utf-8")
+        with patch.object(vmrun_guest.shutil, "which", return_value=None), \
+             self.assertRaises(vmrun_guest.VMError):
+            vmrun_guest.load_creds_file(str(path), str(self.repo))
+
     def test_tracked_location_is_refused(self):
         path = self.repo / "creds.txt"
         path.write_text("VM_GU=analyst\n", encoding="utf-8")
