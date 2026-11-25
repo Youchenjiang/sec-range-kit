@@ -190,7 +190,7 @@ class SelectionTests(unittest.TestCase):
     def test_entry_dirs_selects_every_directory_with_the_entry_file(self):
         plan = self.case.plan("verbatim")
         self.assertEqual(sorted(plan.skills), ["alpha", "delta", "epsilon", "gamma"])
-        self.assertEqual(plan.universe, None)
+        self.assertIsNone(plan.universe)
 
     def test_explicit_rule_uses_the_declared_upstream_directory(self):
         plan = self.case.plan("normalised")

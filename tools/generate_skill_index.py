@@ -80,7 +80,7 @@ def parse_frontmatter(path: Path) -> dict[str, str]:
             i += 1
             continue
 
-        match = re.match(r"^([A-Za-z0-9_-]+):\s*(.*)$", line)
+        match = re.match(r"^([A-Za-z0-9_-]+):(.*)$", line)
         if not match:  # indented continuation of a previously handled scalar
             i += 1
             continue
@@ -186,18 +186,22 @@ def render(records: list[dict]) -> str:
     for license_name, count in sorted(by_license.items(), key=lambda kv: (-kv[1], kv[0])):
         lines.append(f"- 授權 `{license_name}`：{count}")
 
-    lines.append("\n## 技能清單\n")
-    lines.append("| 名稱 | 描述 | 來源 | 授權 | 路徑 |")
-    lines.append("|------|------|------|------|------|")
+    lines.extend([
+        "\n## 技能清單\n",
+        "| 名稱 | 描述 | 來源 | 授權 | 路徑 |",
+        "|------|------|------|------|------|",
+    ])
     for record in records:
         lines.append(
             f"| `{record['name']}` | {_cell(record['description'])} "
             f"| {record['source']} | {record['license']} | `{record['path']}` |"
         )
 
-    lines.append("\n## 來源與授權（provenance）\n")
-    lines.append("| 來源 | 快照 | commit | 授權 | 技能數 |")
-    lines.append("|------|------|--------|------|--------|")
+    lines.extend([
+        "\n## 來源與授權（provenance）\n",
+        "| 來源 | 快照 | commit | 授權 | 技能數 |",
+        "|------|------|--------|------|--------|",
+    ])
     for source in sources:
         count = len(source.get("skills", []))
         lines.append(

@@ -39,7 +39,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SKILLS_DIR = REPO_ROOT / "skills"
-SOURCES_PATH = SKILLS_DIR / "SOURCES.json"
+SOURCES_FILE = "SOURCES.json"
+SOURCES_PATH = SKILLS_DIR / SOURCES_FILE
 INDEX_PATH = SKILLS_DIR / "INDEX.md"
 RULES_PATH = SKILLS_DIR / "import-rules.json"
 
@@ -211,7 +212,7 @@ def parse_frontmatter(text: str) -> dict[str, object]:
             continue
         if body[:1] in " \t" and key is not None:  # continuation of the previous key
             continue
-        match = re.match(r"^([A-Za-z0-9_-]+):[ \t]*(.*)$", body)
+        match = re.match(r"^([A-Za-z0-9_-]+):(.*)$", body)
         if not match:
             continue
         key, value = match.group(1), match.group(2).strip()
@@ -244,9 +245,9 @@ def normalize_entry(raw: bytes, name: str, spec: dict) -> bytes:
         body = line.rstrip("\r\n")
         if rule.get("strip_comments") and body.lstrip().startswith("#"):
             continue
-        match = re.match(r"^([A-Za-z0-9_-]+):[ \t]*(.*)$", body)
+        match = re.match(r"^([A-Za-z0-9_-]+):(.*)$", body)
         if match:
-            key, value = match.group(1), match.group(2)
+            key, value = match.group(1), match.group(2).lstrip(" \t")
             rewritten: str | None = None
             if key in unquote:
                 rewritten = value.strip().strip('"').strip("'")
@@ -342,9 +343,7 @@ def snapshot_candidates(
         return [Path(raw)]
     if snapshot_root is not None:
         return [Path(snapshot_root) / raw]
-    bases = [repo_root]
-    for parent in repo_root.parents[:2]:
-        bases.append(parent)
+    bases = [repo_root, *repo_root.parents[:2]]
     return [base / raw for base in bases]
 
 
@@ -690,7 +689,7 @@ def write_sources_payload(payload: dict, path: Path = SOURCES_PATH) -> bool:
 def check_attribution(plans: list[SourcePlan], rules: dict, skills_dir: Path) -> list[Problem]:
     """SOURCES.json must equal what the rules imply, and cover every skill directory."""
     problems: list[Problem] = []
-    sources_path = skills_dir / "SOURCES.json"
+    sources_path = skills_dir / SOURCES_FILE
     payload = build_sources_payload(rules, plans)
     if not sources_path.is_file():
         problems.append(Problem("sources", f"{sources_path.name} is missing"))
@@ -740,7 +739,7 @@ def _point_index_at(skills_dir: Path):
     # skills_dir is <repo>/skills; index paths are rendered relative to that repo.
     index.REPO_ROOT = skills_dir.resolve().parent
     index.SKILLS_DIR = skills_dir
-    index.SOURCES_PATH = skills_dir / "SOURCES.json"
+    index.SOURCES_PATH = skills_dir / SOURCES_FILE
     index.INDEX_PATH = skills_dir / "INDEX.md"
     try:
         yield index
@@ -866,7 +865,7 @@ def main(argv: list[str] | None = None) -> int:
     skills_dir = SKILLS_DIR
     rules_path = Path(args.rules).resolve() if args.rules else RULES_PATH
     snapshot_root = Path(args.snapshot_root).resolve() if args.snapshot_root else None
-    sources_path = skills_dir / "SOURCES.json"
+    sources_path = skills_dir / SOURCES_FILE
 
     if args.local_only and not args.check:
         print("ERROR --local-only only applies to --check", file=sys.stderr)
