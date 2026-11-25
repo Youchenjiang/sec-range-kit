@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rangekit"
+dynamic = ["version"]
+description = "Shared, reusable tooling for cyber range exercises and DFIR competitions"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+# Known-good DFIR backend; dissect.target 3.25.1 failed on Python 3.14 (glob._Globber).
+dfir = [
+    "dissect.target==3.20",
+    "dissect.esedb==3.18",
+    "colorama==0.4.6",
+]
+
+[tool.setuptools.dynamic]
+version = { file = "VERSION" }
+
+[tool.setuptools.packages.find]
+include = ["rangekit*"]

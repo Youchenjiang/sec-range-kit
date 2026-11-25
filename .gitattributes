@@ -1,0 +1,2 @@
+# Shell scripts run on Linux targets; CRLF breaks `set -euo pipefail`.
+*.sh text eol=lf
