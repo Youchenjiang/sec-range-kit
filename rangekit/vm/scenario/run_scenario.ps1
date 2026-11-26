@@ -127,15 +127,20 @@ $Kinds = @{
         Gone  = { param($p) -not (Get-ItemProperty -Path ('Registry::HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run') -Name $p.value -ErrorAction SilentlyContinue) }
     }
     local_user = @{
+        # New-LocalUser takes a SecureString in process: no net.exe command line, so the
+        # password never reaches Sysmon EID 1 or Security 4688. The account still logs 4720.
         Run   = {
             param($p)
             $secret = $null
             if ($p.password_env) { $secret = [Environment]::GetEnvironmentVariable([string]$p.password_env) }
             $source = 'env ' + $p.password_env
             if (-not $secret) { $secret = New-RandomSecret; $source = 'random' }
-            (Invoke-Native 'net.exe' @('user', $p.user, $secret, '/add')) + ' (password: ' + $source + ')'
+            $secure = ConvertTo-SecureString -String $secret -AsPlainText -Force
+            $secret = $null
+            $u = New-LocalUser -Name $p.user -Password $secure -Description 'rangekit scenario account' -ErrorAction Stop
+            'created ' + $u.Name + ' (password: ' + $source + ')'
         }
-        Clean = { param($p) Invoke-Native 'net.exe' @('user', $p.user, '/delete') 20 }
+        Clean = { param($p) Remove-LocalUser -Name $p.user -ErrorAction Stop; 'removed' }
         Gone  = { param($p) -not (Get-LocalUser -Name $p.user -ErrorAction SilentlyContinue) }
     }
     group_add = @{

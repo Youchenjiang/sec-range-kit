@@ -23,9 +23,9 @@
     },
     {
       "id": "S04", "kind": "local_user", "technique": "T1136.001",
-      "name": "Create a local account with net.exe",
+      "name": "Create a local account in process (New-LocalUser; no password on a command line)",
       "params": { "user": "rk_demo_svc", "password_env": "RANGEKIT_SIM_PASSWORD" },
-      "expect": { "sysmon": "1 (net.exe -> net1.exe)", "security": "4720", "other": "-" }
+      "expect": { "sysmon": "- (no child process)", "security": "4720; 4722 enabled; 4738 changed", "other": "-" }
     },
     {
       "id": "S05", "kind": "group_add", "technique": "T1098",
