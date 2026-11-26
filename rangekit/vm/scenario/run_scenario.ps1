@@ -108,8 +108,11 @@ function New-RandomSecret([int]$Length = 12) {
 $runKey = 'HKCU\Software\Microsoft\Windows\CurrentVersion\Run'
 
 # ---------------------------------------------------------------------------
-# kinds: Run makes the artifact, Clean removes it, Gone verifies the removal
+# kinds: Run makes the artifact, Clean removes it, Gone verifies the removal.
+# Gone returns $true (absent) or $false (present) and THROWS when it cannot tell,
+# so a failed or timed-out query is never reported as a clean removal.
 # ---------------------------------------------------------------------------
+$runKeyPath = 'Registry::HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run'
 $Kinds = @{
     scheduled_task = @{
         # Created DISABLED: Task Scheduler still logs the registration (4698, TaskScheduler/106)
@@ -120,17 +123,17 @@ $Kinds = @{
             ' | disable: ' + (Invoke-Native 'schtasks.exe' @('/change', '/tn', $p.task, '/disable'))
         }
         Clean = { param($p) Invoke-Native 'schtasks.exe' @('/delete', '/tn', $p.task, '/f') 20 }
-        Gone  = { param($p) (Invoke-Native 'schtasks.exe' @('/query', '/tn', $p.task) 20) -notmatch '\[exit=0\]' }
+        Gone  = { param($p) -not (Get-ScheduledTask -ErrorAction Stop | Where-Object { $_.TaskName -eq $p.task }) }
     }
     service = @{
         Run   = { param($p) Invoke-Native 'sc.exe' @('create', $p.service, 'binPath=', $p.command, 'start=', 'demand') }
         Clean = { param($p) Invoke-Native 'sc.exe' @('delete', $p.service) 20 }
-        Gone  = { param($p) -not (Get-Service -Name $p.service -ErrorAction SilentlyContinue) }
+        Gone  = { param($p) -not (Get-Service -ErrorAction Stop | Where-Object { $_.Name -eq $p.service }) }
     }
     run_key = @{
         Run   = { param($p) Invoke-Native 'reg.exe' @('add', $runKey, '/v', $p.value, '/t', 'REG_SZ', '/d', $p.data, '/f') }
         Clean = { param($p) Invoke-Native 'reg.exe' @('delete', $runKey, '/v', $p.value, '/f') 20 }
-        Gone  = { param($p) -not (Get-ItemProperty -Path ('Registry::HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run') -Name $p.value -ErrorAction SilentlyContinue) }
+        Gone  = { param($p) (Get-Item -Path $runKeyPath -ErrorAction Stop).GetValueNames() -notcontains $p.value }
     }
     local_user = @{
         # New-LocalUser takes a SecureString in process: no net.exe command line, so the
@@ -147,7 +150,7 @@ $Kinds = @{
             'created ' + $u.Name + ' (password: ' + $source + ')'
         }
         Clean = { param($p) Remove-LocalUser -Name $p.user -ErrorAction Stop; 'removed' }
-        Gone  = { param($p) -not (Get-LocalUser -Name $p.user -ErrorAction SilentlyContinue) }
+        Gone  = { param($p) -not (Get-LocalUser -ErrorAction Stop | Where-Object { $_.Name -eq $p.user }) }
     }
     group_add = @{
         Run = { param($p) Invoke-Native 'net.exe' @('localgroup', $p.group, $p.user, '/add') }
@@ -264,8 +267,8 @@ $Kinds = @{
         }
         Gone = {
             param($p)
-            -not (Get-CimInstance -Namespace root\subscription -ClassName __EventFilter -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $p.filter }) -and
-            -not (Get-CimInstance -Namespace root\subscription -ClassName CommandLineEventConsumer -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $p.consumer })
+            -not (Get-CimInstance -Namespace root\subscription -ClassName __EventFilter -ErrorAction Stop | Where-Object { $_.Name -eq $p.filter }) -and
+            -not (Get-CimInstance -Namespace root\subscription -ClassName CommandLineEventConsumer -ErrorAction Stop | Where-Object { $_.Name -eq $p.consumer })
         }
     }
 }
@@ -298,6 +301,7 @@ function Measure-StepLeftovers($s) {
     $left = 0
     $k = $Kinds[[string]$s.kind]
     if ($k.Gone) {
+        # a check that throws could not confirm the removal: count it as left
         $gone = try { [bool](& $k.Gone $s.params) } catch { $false }
         Write-GoneLine $s ([string]$s.kind) $gone
         if (-not $gone) { $left++ }
