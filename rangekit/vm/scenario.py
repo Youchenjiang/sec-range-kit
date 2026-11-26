@@ -22,6 +22,8 @@ import re
 import sys
 from pathlib import Path
 
+from rangekit.common.safe_paths import UnsafePathError, resolve_cli_path
+
 # kind -> required params (all strings unless listed in LIST_PARAMS / INT_PARAMS)
 KINDS: dict[str, tuple[str, ...]] = {
     "scheduled_task": ("task", "command"),
@@ -50,8 +52,12 @@ SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 SAFE_GROUP = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$")
 STEP_ID = re.compile(r"^[A-Za-z0-9_-]{1,16}$")
 TECHNIQUE = re.compile(r"^T\d{4}(\.\d{3})?$")
-STAGE_DIR = re.compile(r"^[A-Za-z]:\\(?:[A-Za-z0-9_. -]+\\?)*$")
+# each segment starts with its own backslash, so matching stays linear
+STAGE_DIR = re.compile(r"^[A-Za-z]:(?:\\[A-Za-z0-9_. -]{1,64}){0,16}\\?$")
 EXPECT_KEYS = ("sysmon", "security", "other")
+# Default staging directory INSIDE THE GUEST VM; this module never writes there.
+# Staging in the system temp directory is deliberate: detection rules key on it.
+GUEST_STAGE_DIR = "C:\\Windows\\Temp"  # NOSONAR guest path string, never opened on the host
 
 
 class ScenarioError(ValueError):
@@ -135,8 +141,8 @@ def validate(data: object) -> list[str]:
     problems: list[str] = []
     if not isinstance(data.get("name"), str) or not SAFE_NAME.fullmatch(data["name"]):
         problems.append("name must be letters, digits, _ . - (max 64)")
-    stage = data.get("stage_dir", "C:\\Windows\\Temp")
-    if not isinstance(stage, str) or not STAGE_DIR.fullmatch(stage) or ".." in stage:
+    stage = data.get("stage_dir", GUEST_STAGE_DIR)
+    if not isinstance(stage, str) or len(stage) > 260 or not STAGE_DIR.fullmatch(stage) or ".." in stage:
         problems.append("stage_dir must be an absolute Windows directory without ..")
     steps = data.get("steps")
     if not isinstance(steps, list) or not steps:
@@ -166,7 +172,7 @@ def _check_group_targets(steps: list) -> list[str]:
 
 def cleanup_plan(data: dict) -> list[str]:
     """What ``run_scenario.ps1 -Cleanup`` removes, one line per artifact, in removal order."""
-    stage = data.get("stage_dir", "C:\\Windows\\Temp").rstrip("\\")
+    stage = data.get("stage_dir", GUEST_STAGE_DIR).rstrip("\\")
     lines: list[str] = []
     for step in reversed(data["steps"]):
         p = step.get("params", {})
@@ -197,11 +203,11 @@ def load(path: Path) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("command", choices=("validate", "plan"))
-    parser.add_argument("scenario", type=Path)
+    parser.add_argument("scenario")
     args = parser.parse_args(argv)
     try:
-        data = load(args.scenario)
-    except (OSError, json.JSONDecodeError, ScenarioError) as exc:
+        data = load(resolve_cli_path(args.scenario))
+    except (OSError, json.JSONDecodeError, ScenarioError, UnsafePathError) as exc:
         print(f"INVALID {args.scenario}:\n{exc}", file=sys.stderr)
         return 1
     if args.command == "validate":

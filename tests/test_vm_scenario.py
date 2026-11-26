@@ -6,8 +6,10 @@ import json
 import re
 import shutil
 import subprocess
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from rangekit.vm import scenario as sc
 
@@ -58,6 +60,19 @@ class RejectionTests(unittest.TestCase):
     def assert_rejected(self, mutate, fragment: str) -> None:
         problems = self.problems(mutate)
         self.assertTrue(any(fragment in p for p in problems), problems)
+
+    def test_stage_dir_check_is_linear_on_hostile_input(self) -> None:
+        started = time.perf_counter()
+        self.assert_rejected(lambda d: d.update(stage_dir="A:\\" + " " * 5000 + "!"), "stage_dir")
+        self.assertLess(time.perf_counter() - started, 1.0)
+        self.assertEqual(self.problems(lambda d: d.update(stage_dir="D:\\lab stage\\run-1\\")), [])
+
+    def test_cli_refuses_a_path_outside_the_allowed_roots(self) -> None:
+        err = io.StringIO()
+        with mock.patch.object(sc, "resolve_cli_path", side_effect=sc.UnsafePathError("outside")), \
+                contextlib.redirect_stderr(err):
+            self.assertEqual(sc.main(["validate", "elsewhere.json"]), 1)
+        self.assertIn("outside", err.getvalue())
 
     def test_unknown_kind(self) -> None:
         self.assert_rejected(lambda d: d["steps"][0].update(kind="format_disk"), "is not one of")
