@@ -42,6 +42,31 @@ $releases = @(
     @('gchq/CyberChef', '^CyberChef_.*\.zip$', 'CyberChef')
 )
 
+# Tools a player may already have, installed some other way: use those, never a second copy.
+$searchRoots = @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA, (Join-Path $env:LOCALAPPDATA 'Programs'),
+    $env:USERPROFILE, (Join-Path $env:USERPROFILE 'Downloads'), (Join-Path $env:USERPROFILE 'Desktop'), 'C:\Tools', $Dest) |
+    Where-Object { $_ -and (Test-Path $_) }
+function Find-Existing([string]$Pattern, [string]$Leaf) {
+    foreach ($root in $searchRoots) {
+        $hit = Get-ChildItem $root -Directory -Filter $Pattern -ErrorAction SilentlyContinue |
+            Where-Object { -not $Leaf -or (Get-ChildItem $_.FullName -Recurse -Depth 2 -Filter $Leaf -ErrorAction SilentlyContinue | Select-Object -First 1) } |
+            Select-Object -First 1
+        if ($hit) { return $hit.FullName }
+    }
+    return $null
+}
+Show-Step 'already installed (used as is)'
+$existing = @{
+    'IDA Pro' = Find-Existing 'IDA*' 'ida*.exe'
+    'Ghidra'  = $(if (Get-Command ghidraRun -ErrorAction SilentlyContinue) { (Get-Command ghidraRun).Source } else { Find-Existing 'ghidra*' 'ghidraRun.bat' })
+    'Burp'    = Find-Existing 'BurpSuite*' 'BurpSuite*.exe'
+}
+foreach ($name in $existing.Keys) {
+    Write-Host ('  ' + $name.PadRight(8) + ' ' + $(if ($existing[$name]) { $existing[$name] } else { '(not found)' }))
+}
+if ($existing['Ghidra']) { $releases = @($releases | Where-Object { $_[2] -ne 'ghidra' }) }
+if (-not $existing['IDA Pro']) { Write-Host '  note: IDA Pro is not installed by this script; Ghidra covers decompiling.' }
+
 if (-not $SkipWinget) {
     Show-Step 'winget packages'
     if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
@@ -52,6 +77,10 @@ if (-not $SkipWinget) {
         foreach ($id in $wingetPackages.Keys) {
             $label = $wingetPackages[$id]
             if ($installed -match [regex]::Escape($id)) { Write-Host ('  ok      ' + $label + ' (' + $id + ')'); continue }
+            # any Burp edition already present (Professional, or installed outside winget) counts
+            if ($id -like 'PortSwigger.BurpSuite.*' -and ($existing['Burp'] -or $installed -match 'PortSwigger\.BurpSuite')) {
+                Write-Host ('  ok      Burp Suite already installed; Community not added'); continue
+            }
             & winget show --id $id --exact --accept-source-agreements *> $null
             if ($LASTEXITCODE -ne 0) { Write-Host ('  skip    ' + $id + ' is not in the winget catalog'); $failed.Add('winget:' + $id); continue }
             if ($DryRun) { Write-Host ('  [dry-run] winget install --id ' + $id + ' --exact'); continue }
@@ -88,7 +117,9 @@ if (-not $SkipReleases) {
 
 Show-Step 'done'
 if ($DryRun) { Write-Host 'dry run: nothing was changed' }
-Write-Host ('Ghidra: run ' + (Join-Path $Dest 'ghidra') + '\ghidra_*\ghidraRun.bat (needs the JDK above)')
+if ($existing['Ghidra']) { Write-Host ('Ghidra: use the installed copy at ' + $existing['Ghidra']) }
+else { Write-Host ('Ghidra: run ' + (Join-Path $Dest 'ghidra') + '\ghidra_*\ghidraRun.bat (needs the JDK above)') }
+if ($existing['IDA Pro']) { Write-Host ('IDA Pro: ' + $existing['IDA Pro'] + '  (MCP setup: MCP_SETUP.zh-TW.md in the solving folder)') }
 Write-Host ('CyberChef: open ' + (Join-Path $Dest 'CyberChef') + '\CyberChef_*.html in a browser (works offline)')
 if ($failed.Count -gt 0) {
     Write-Host ('not installed (' + $failed.Count + '): ' + ($failed -join ', '))
