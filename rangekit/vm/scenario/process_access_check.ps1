@@ -10,10 +10,15 @@
 # written) and saves the EID 10 events it produced. Run the same open in a scenario
 # (kind process_open) before and after to show the blind spot closing.
 #
+# Only events whose source is this PowerShell process, whose target is -TargetImage
+# and whose time is at or after the probe count as evidence; other EID 10 events in
+# the window are reported as unrelated.
+#
 #   -Revert : reload Sysmon from -BaselineConfig and stop.
 #
-# Exit codes: 0 done; 1 setup or Sysmon reload failed (a failed patch reload is
-# followed by a baseline reload attempt).
+# Exit codes: 0 probe events found (or revert applied); 1 setup or Sysmon reload
+# failed (a failed patch reload is followed by a baseline reload attempt);
+# 3 the probe ran but Sysmon recorded none of its handle opens.
 #
 # ASCII ONLY.
 
@@ -134,28 +139,37 @@ Start-Sleep -Seconds 4
 
 # ---- 4. EID 10 evidence ----
 L ''
-L '--- 4. Sysmon EID 10 events since the reload ---'
-$ev10 = @()
+L '--- 4. Sysmon EID 10 events from this probe ---'
+$window = @()
 try {
-    $ev10 = Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-Sysmon/Operational'; Id = 10; StartTime = $t0.AddMinutes(-1) } -ErrorAction Stop
+    $window = @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-Sysmon/Operational'; Id = 10; StartTime = $mark.AddSeconds(-1) } -ErrorAction Stop)
 } catch { L ('  query: ' + $_.Exception.Message) }
-L ('  EID 10 events: ' + @($ev10).Count)
+$probeEvents = @()
+foreach ($e in $window) {
+    $data = @{}
+    foreach ($d in ([xml]$e.ToXml()).Event.EventData.Data) { $data[$d.Name] = [string]$d.'#text' }
+    # this process opened the handles; the target must be the image the rule names
+    if ($data['SourceProcessId'] -eq [string]$PID -and $data['TargetImage'] -eq $TargetImage) { $probeEvents += , @($e, $data) }
+}
+$unrelated = $window.Count - $probeEvents.Count
+L ('  EID 10 since the probe: ' + $window.Count + ' (from this probe: ' + $probeEvents.Count + ', unrelated: ' + $unrelated + ')')
 $lines = @(
-    'Sysmon EID 10 (ProcessAccess) evidence'
+    'Sysmon EID 10 (ProcessAccess) evidence for one probe'
     ('probe_utc   = ' + $mark.ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss.fff') + 'Z')
-    ('probe       = ' + $detail)
+    ('probe       = ' + $detail + ' source_pid=' + $PID)
     ('config      = ' + $patchedPath + ' (include rules = ' + $ruleCount + ')')
-    ('count       = ' + @($ev10).Count)
+    ('matched     = ' + $probeEvents.Count + ' (source pid ' + $PID + ', target ' + $TargetImage + ')')
+    ('unrelated   = ' + $unrelated + ' other EID 10 events in the same window, not listed')
     ''
 )
-foreach ($e in $ev10) {
-    $xml = [xml]$e.ToXml()
+foreach ($pair in $probeEvents) {
     $lines += '-----------------------------------------------------------'
-    $lines += 'TimeCreated(utc) = ' + $e.TimeCreated.ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss.fff') + 'Z'
-    foreach ($d in $xml.Event.EventData.Data) { $lines += ('  ' + $d.Name.PadRight(22) + ' = ' + $d.'#text') }
+    $lines += 'TimeCreated(utc) = ' + $pair[0].TimeCreated.ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss.fff') + 'Z'
+    foreach ($name in ($pair[1].Keys | Sort-Object)) { $lines += ('  ' + $name.PadRight(22) + ' = ' + $pair[1][$name]) }
 }
 [IO.File]::WriteAllLines((Join-Path $OutDir 'eid10.txt'), $lines, $utf8)
 
 L ''
-L ('DONE process_access_check events=' + @($ev10).Count + ' (revert with -Revert)')
-Write-Host ('DONE process_access_check events=' + @($ev10).Count + ' -> ' + $log)
+L ('DONE process_access_check matched=' + $probeEvents.Count + ' unrelated=' + $unrelated + ' (revert with -Revert)')
+Write-Host ('DONE process_access_check matched=' + $probeEvents.Count + ' -> ' + $log)
+if ($probeEvents.Count -eq 0) { exit 3 }
