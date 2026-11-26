@@ -60,7 +60,7 @@ function Invoke-SysmonConfig([string]$Config) {
     return ($code -eq 0)
 }
 
-function Stop-WithError([string]$Message) {
+function Show-ErrorAndExit([string]$Message) {
     L ('ERROR: ' + $Message)
     Write-Host ('ERROR ' + $Message + ' -> ' + $log)
     exit 1
@@ -73,7 +73,7 @@ L ('local ' + $t0.ToString('yyyy-MM-dd HH:mm:ss K') + ' | utc ' + $t0.ToUniversa
 if ($Revert) {
     L ''
     L '--- revert: reload the baseline config ---'
-    if (-not (Invoke-SysmonConfig $BaselineConfig)) { Stop-WithError 'Sysmon rejected the baseline config; the patched config may still be active' }
+    if (-not (Invoke-SysmonConfig $BaselineConfig)) { Show-ErrorAndExit 'Sysmon rejected the baseline config; the patched config may still be active' }
     L 'DONE revert'
     Write-Host ('DONE revert -> ' + $log)
     exit 0
@@ -101,7 +101,7 @@ L '--- 2. reload Sysmon with the patched config ---'
 if (-not (Invoke-SysmonConfig $patchedPath)) {
     L '  patch rejected; reloading the baseline config so Sysmon is left in a known state'
     $restored = Invoke-SysmonConfig $BaselineConfig
-    Stop-WithError ('Sysmon rejected the patched config; probe not run; baseline reload ' + $(if ($restored) { 'succeeded' } else { 'FAILED' }))
+    Show-ErrorAndExit ('Sysmon rejected the patched config; probe not run; baseline reload ' + $(if ($restored) { 'succeeded' } else { 'FAILED' }))
 }
 Start-Sleep -Seconds 2
 
