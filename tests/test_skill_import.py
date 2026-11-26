@@ -10,6 +10,7 @@ local-only check needs nothing but the repository itself.
 import contextlib
 import io
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -131,16 +132,50 @@ def rules_for(upstream: Upstream, **overrides) -> dict:
     return base
 
 
+_TEMPLATE: tempfile.TemporaryDirectory | None = None
+_TEMPLATE_COMMIT = ""
+
+
+def _template_root() -> Path:
+    """Build the git repositories behind ``Case`` once per module; each Case copies them.
+
+    Every git call costs tens of milliseconds on Windows, and rebuilding the two
+    repositories for each of ~40 tests dominated the run.
+    """
+    global _TEMPLATE, _TEMPLATE_COMMIT
+    if _TEMPLATE is None:
+        _TEMPLATE = tempfile.TemporaryDirectory()
+        root = Path(_TEMPLATE.name)
+        repo = make_repo(root / "repo")
+        (repo / "skills").mkdir(parents=True)
+        _TEMPLATE_COMMIT = Upstream(root).commit
+    return Path(_TEMPLATE.name)
+
+
+def tearDownModule() -> None:
+    if _TEMPLATE is not None:
+        _TEMPLATE.cleanup()
+
+
+class _CopiedUpstream:
+    """The template's upstream snapshot at its copied location (same commit)."""
+
+    def __init__(self, path: Path, commit: str):
+        self.path = path
+        self.commit = commit
+
+
 class Case:
     """A temp workspace: one destination repo plus one upstream snapshot."""
 
     def __init__(self, tmp: str):
         self.root = Path(tmp)
-        self.repo = make_repo(self.root / "repo")
+        shutil.copytree(_template_root(), self.root, dirs_exist_ok=True)
+        self.repo = self.root / "repo"
         self.skills = self.repo / "skills"
-        self.skills.mkdir(parents=True)
-        self.upstream = Upstream(self.root)
+        self.upstream = _CopiedUpstream(self.root / "snapshots" / "upstream", _TEMPLATE_COMMIT)
         self.rules_path = self.skills / "import-rules.json"
+        # the rules hold absolute snapshot paths, so they are written after the copy
         self.rules = rules_for(self.upstream)
         self.write_rules()
         local = self.skills / "local-skill"
