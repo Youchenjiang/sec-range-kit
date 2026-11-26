@@ -52,7 +52,8 @@ class ExampleTests(unittest.TestCase):
 
 
 class RejectionTests(unittest.TestCase):
-    def problems(self, mutate) -> list[str]:
+    @staticmethod
+    def problems(mutate) -> list[str]:
         data = copy.deepcopy(example())
         mutate(data)
         return sc.validate(data)

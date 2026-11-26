@@ -41,15 +41,14 @@ KINDS: dict[str, tuple[str, ...]] = {
     "process_open": ("process", "access"),
     "wmi_subscription": ("filter", "consumer", "command"),
 }
-LIST_PARAMS = {"users", "access"}
-INT_PARAMS = {"attempts_per_user"}
-# names that end up in task, service, account, registry and WMI object names
-NAME_PARAMS = {"task", "service", "value", "user", "group", "filter", "consumer", "process"}
+# optional params, per kind
+OPTIONAL: dict[str, tuple[str, ...]] = {"local_user": ("password_env",)}
 # file names created under the scenario's stage directory
 FILE_PARAMS = {"blob_file", "out_file", "file", "staged_file"}
 
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 SAFE_GROUP = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$")
+ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]{2,63}$")
 STEP_ID = re.compile(r"^[A-Za-z0-9_-]{1,16}$")
 TECHNIQUE = re.compile(r"^T\d{4}(\.\d{3})?$")
 # each segment starts with its own backslash, so matching stays linear
@@ -64,74 +63,78 @@ class ScenarioError(ValueError):
     """The scenario file is unusable; the message lists every problem."""
 
 
-def _check_param(kind: str, key: str, value: object) -> str | None:
-    if key in LIST_PARAMS:
-        if not isinstance(value, list) or not value:
-            return f"{key} must be a non-empty list"
-        if key == "users" and not all(isinstance(v, str) and SAFE_NAME.fullmatch(v) for v in value):
-            return f"{key} entries must be simple names"
-        if key == "access" and not all(isinstance(v, int) and 0 < v <= 0x1FFFFF for v in value):
-            return f"{key} entries must be process access masks (1..0x1FFFFF)"
-        return None
-    if key in INT_PARAMS:
-        return None if isinstance(value, int) and 1 <= value <= 20 else f"{key} must be an integer 1..20"
-    if not isinstance(value, str) or not value.strip():
-        return f"{key} must be a non-empty string"
-    if key == "group" and not SAFE_GROUP.fullmatch(value):
-        return f"{key} {value!r} has characters outside letters, digits, space, _ . -"
-    if key in NAME_PARAMS - {"group"} and not SAFE_NAME.fullmatch(value):
-        return f"{key} {value!r} must be letters, digits, _ . - (max 64)"
-    if key in FILE_PARAMS and not SAFE_NAME.fullmatch(value):
-        return f"{key} {value!r} must be a bare file name"
-    if key == "url" and not value.startswith("https://"):
-        return f"{key} must be an https URL"
-    if kind == "process_open" and key == "process" and value.lower().endswith(".exe"):
-        return "process is the name without .exe (as Get-Process expects)"
-    return None
+def _text(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _name(value: object) -> bool:
+    return isinstance(value, str) and bool(SAFE_NAME.fullmatch(value))
+
+
+# param -> (accepts the value, message when it does not)
+PARAM_RULES: dict[str, tuple] = {
+    **{key: (_name, "must be letters, digits, _ . - (max 64)")
+       for key in ("task", "service", "value", "user", "filter", "consumer")},
+    **{key: (_name, "must be a bare file name") for key in FILE_PARAMS},
+    **{key: (_text, "must be a non-empty string") for key in ("command", "data", "marker", "source", "stream")},
+    "group": (lambda v: isinstance(v, str) and bool(SAFE_GROUP.fullmatch(v)),
+              "must be letters, digits, space, _ . - (max 64)"),
+    "process": (lambda v: _name(v) and not v.lower().endswith(".exe"),
+                "must be a process name without .exe (as Get-Process expects)"),
+    "url": (lambda v: isinstance(v, str) and v.startswith("https://"), "must be an https URL"),
+    "users": (lambda v: isinstance(v, list) and bool(v) and all(_name(u) for u in v),
+              "must be a non-empty list of simple names"),
+    "access": (lambda v: isinstance(v, list) and bool(v)
+               and all(isinstance(m, int) and 0 < m <= 0x1FFFFF for m in v),
+               "must be a non-empty list of process access masks (1..0x1FFFFF)"),
+    "attempts_per_user": (lambda v: isinstance(v, int) and 1 <= v <= 20, "must be an integer 1..20"),
+    "password_env": (lambda v: isinstance(v, str) and bool(ENV_NAME.fullmatch(v)),
+                     "must be an UPPER_CASE environment variable name"),
+}
+
+
+def _check_params(where: str, kind: str, params: dict) -> list[str]:
+    allowed = KINDS[kind] + OPTIONAL.get(kind, ())
+    problems = [f"{where}: {kind} needs params.{key}" for key in KINDS[kind] if key not in params]
+    for key, value in params.items():
+        if key not in allowed:
+            problems.append(f"{where}: params.{key} is not used by {kind}")
+            continue
+        accepts, message = PARAM_RULES[key]
+        if not accepts(value):
+            problems.append(f"{where}: params.{key} {message}")
+    return problems
+
+
+def _step_label(index: int, step: dict, seen_ids: set[str]) -> tuple[str, list[str]]:
+    """How problems refer to the step, plus any problem with its id."""
+    sid = step.get("id")
+    if not isinstance(sid, str) or not STEP_ID.fullmatch(sid):
+        return f"steps[{index}]", [f"steps[{index}].id must match {STEP_ID.pattern}"]
+    if sid in seen_ids:
+        return f"steps[{index}]", [f"steps[{index}].id {sid!r} is used twice"]
+    seen_ids.add(sid)
+    return f"step {sid}", []
 
 
 def _check_step(index: int, step: object, seen_ids: set[str]) -> list[str]:
-    where = f"steps[{index}]"
     if not isinstance(step, dict):
-        return [f"{where} must be an object"]
-    problems: list[str] = []
-    sid = step.get("id")
-    if not isinstance(sid, str) or not STEP_ID.fullmatch(sid):
-        problems.append(f"{where}.id must match {STEP_ID.pattern}")
-    elif sid in seen_ids:
-        problems.append(f"{where}.id {sid!r} is used twice")
-    else:
-        seen_ids.add(sid)
-        where = f"step {sid}"
+        return [f"steps[{index}] must be an object"]
+    where, problems = _step_label(index, step, seen_ids)
     kind = step.get("kind")
     if kind not in KINDS:
-        problems.append(f"{where}.kind {kind!r} is not one of {', '.join(sorted(KINDS))}")
-        return problems
-    if not isinstance(step.get("technique"), str) or not TECHNIQUE.fullmatch(step["technique"]):
+        return problems + [f"{where}.kind {kind!r} is not one of {', '.join(sorted(KINDS))}"]
+    if not (isinstance(step.get("technique"), str) and TECHNIQUE.fullmatch(step["technique"])):
         problems.append(f"{where}.technique must look like T1234 or T1234.001")
-    if not isinstance(step.get("name"), str) or not step["name"].strip():
+    if not _text(step.get("name")):
         problems.append(f"{where}.name is required")
-    params = step.get("params", {})
-    if not isinstance(params, dict):
-        return problems + [f"{where}.params must be an object"]
-    for key in KINDS[kind]:
-        if key not in params:
-            problems.append(f"{where}: {kind} needs params.{key}")
-    for key, value in params.items():
-        if key not in KINDS[kind] and key != "password_env":
-            problems.append(f"{where}: params.{key} is not used by {kind}")
-            continue
-        if key == "password_env":
-            if kind != "local_user" or not isinstance(value, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{2,63}", value):
-                problems.append(f"{where}: password_env must be an UPPER_CASE variable name on a local_user step")
-            continue
-        issue = _check_param(kind, key, value)
-        if issue:
-            problems.append(f"{where}: {issue}")
     expect = step.get("expect", {})
     if not isinstance(expect, dict) or set(expect) - set(EXPECT_KEYS):
         problems.append(f"{where}.expect may only hold {', '.join(EXPECT_KEYS)}")
-    return problems
+    params = step.get("params", {})
+    if not isinstance(params, dict):
+        return problems + [f"{where}.params must be an object"]
+    return problems + _check_params(where, kind, params)
 
 
 def validate(data: object) -> list[str]:
