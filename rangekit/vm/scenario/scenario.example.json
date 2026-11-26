@@ -1,0 +1,91 @@
+{
+  "name": "rangekit-demo",
+  "description": "Benign, reversible known-answer run: every step only makes telemetry appear. calc.exe is referenced, never executed.",
+  "stage_dir": "C:\\Windows\\Temp",
+  "steps": [
+    {
+      "id": "S01", "kind": "scheduled_task", "technique": "T1053.005",
+      "name": "Scheduled task creation through schtasks.exe",
+      "params": { "task": "RangeKitDemo", "command": "cmd.exe /c calc.exe" },
+      "expect": { "sysmon": "1 (schtasks.exe); 11 (task file under System32\\Tasks)", "security": "4698", "other": "TaskScheduler/106" }
+    },
+    {
+      "id": "S02", "kind": "service", "technique": "T1543.002",
+      "name": "Service creation through sc.exe",
+      "params": { "service": "RangeKitDemoSvc", "command": "C:\\Windows\\System32\\cmd.exe /c calc.exe" },
+      "expect": { "sysmon": "1 (sc.exe); 13 (ImagePath)", "security": "4697 only with Security System Extension auditing", "other": "System/7045" }
+    },
+    {
+      "id": "S03", "kind": "run_key", "technique": "T1547.001",
+      "name": "HKCU Run key persistence via reg.exe",
+      "params": { "value": "RangeKitDemo", "data": "C:\\Windows\\Temp\\rk_loader.exe" },
+      "expect": { "sysmon": "1 (reg.exe); 13 (CurrentVersion\\Run)", "security": "4657 only with registry object auditing", "other": "-" }
+    },
+    {
+      "id": "S04", "kind": "local_user", "technique": "T1136.001",
+      "name": "Create a local account with net.exe",
+      "params": { "user": "rk_demo_svc", "password_env": "RANGEKIT_SIM_PASSWORD" },
+      "expect": { "sysmon": "1 (net.exe -> net1.exe)", "security": "4720", "other": "-" }
+    },
+    {
+      "id": "S05", "kind": "group_add", "technique": "T1098",
+      "name": "Add the new account to the local Administrators group",
+      "params": { "user": "rk_demo_svc", "group": "Administrators" },
+      "expect": { "sysmon": "1 (net.exe -> net1.exe)", "security": "4732", "other": "-" }
+    },
+    {
+      "id": "S06", "kind": "failed_logons", "technique": "T1110",
+      "name": "Failed network logons through LogonUser (unknown account and wrong password)",
+      "params": { "users": ["rk_demo_ghost", "rk_demo_svc"], "attempts_per_user": 2 },
+      "expect": { "sysmon": "1 (powershell.exe only)", "security": "4625 LogonType 3 (0xC0000064 unknown account, 0xC000006A bad password); 4776", "other": "-" }
+    },
+    {
+      "id": "S07", "kind": "encoded_powershell", "technique": "T1059.001",
+      "name": "Base64 encoded PowerShell command line",
+      "params": { "marker": "RANGEKIT_ENCODED_MARKER" },
+      "expect": { "sysmon": "1 (CommandLine carries -EncodedCommand)", "security": "4688", "other": "PowerShell/4104 recovers the plaintext" }
+    },
+    {
+      "id": "S08", "kind": "certutil_decode", "technique": "T1140",
+      "name": "certutil -decode drops a .ps1 from a base64 blob",
+      "params": { "marker": "RANGEKIT_DECODED_MARKER", "blob_file": "rk_blob.txt", "out_file": "rk_decoded.ps1" },
+      "expect": { "sysmon": "1 (certutil.exe); 11 (.ps1)", "security": "4688", "other": "-" }
+    },
+    {
+      "id": "S09", "kind": "ads", "technique": "T1564.004",
+      "name": "Hide data in an NTFS alternate data stream",
+      "params": { "file": "rk_ads.ps1", "stream": "Zone.Identifier", "data": "rangekit-ads-payload" },
+      "expect": { "sysmon": "15 (FileCreateStreamHash)", "security": "- (Security.evtx does not see streams)", "other": "-" }
+    },
+    {
+      "id": "S10", "kind": "lolbin_egress", "technique": "T1105",
+      "name": "curl.exe staged in the stage directory and used for egress",
+      "params": { "source": "C:\\Windows\\System32\\curl.exe", "staged_file": "rk_net.exe", "url": "https://example.com" },
+      "expect": { "sysmon": "1 (image in the stage directory); 3 (NetworkConnect); 22 (DnsQuery)", "security": "5156 only with Filtering Platform auditing", "other": "-" }
+    },
+    {
+      "id": "S11", "kind": "discovery", "technique": "T1082",
+      "name": "Discovery burst: host, account and network enumeration",
+      "params": {},
+      "expect": { "sysmon": "1 x5+ (whoami, net, net1, ipconfig, tasklist)", "security": "4688 x5 with CommandLine", "other": "-" }
+    },
+    {
+      "id": "S12", "kind": "eicar", "technique": "T1204.002",
+      "name": "EICAR test file written to disk (Defender left on)",
+      "params": { "file": "rk_eicar.exe" },
+      "expect": { "sysmon": "11 (may be missed if Defender blocks the write)", "security": "-", "other": "Defender/1116 and 1117" }
+    },
+    {
+      "id": "S13", "kind": "process_open", "technique": "T1003.001",
+      "name": "Open handles to lsass.exe (no dump is written)",
+      "params": { "process": "lsass", "access": [4096, 5136] },
+      "expect": { "sysmon": "10 only when ProcessAccess has a rule for the target (see process_access_check.ps1)", "security": "-", "other": "-" }
+    },
+    {
+      "id": "S14", "kind": "wmi_subscription", "technique": "T1546.003",
+      "name": "WMI permanent event subscription (filter, consumer, binding)",
+      "params": { "filter": "RangeKitDemoFilter", "consumer": "RangeKitDemoConsumer", "command": "cmd.exe /c calc.exe" },
+      "expect": { "sysmon": "19, 20, 21", "security": "-", "other": "-" }
+    }
+  ]
+}
