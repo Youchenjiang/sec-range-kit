@@ -269,34 +269,45 @@ function Get-StagedFiles($p) {
     }
 }
 
+function Remove-StepArtifacts($s) {
+    $k = $Kinds[[string]$s.kind]
+    if ($k.Clean) {
+        $res = try { (& $k.Clean $s.params 2>&1 | Out-String).Trim() } catch { 'error: ' + $_.Exception.Message }
+        L ('  [' + $s.id + '] ' + ([string]$s.kind).PadRight(18) + ' clean -> ' + $res)
+    }
+    foreach ($f in (Get-StagedFiles $s.params)) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+}
+
+function Write-GoneLine($s, [string]$What, [bool]$Gone) {
+    L ('  [' + $s.id + '] ' + $What.PadRight(40) + ' : ' + $(if ($Gone) { 'GONE' } else { 'STILL PRESENT <<<' }))
+}
+
+# Number of artifacts of one step that are still present.
+function Measure-StepLeftovers($s) {
+    $left = 0
+    $k = $Kinds[[string]$s.kind]
+    if ($k.Gone) {
+        $gone = try { [bool](& $k.Gone $s.params) } catch { $false }
+        Write-GoneLine $s ([string]$s.kind) $gone
+        if (-not $gone) { $left++ }
+    }
+    foreach ($f in (Get-StagedFiles $s.params)) {
+        $gone = -not (Test-Path -LiteralPath $f)
+        Write-GoneLine $s ('file ' + $f) $gone
+        if (-not $gone) { $left++ }
+    }
+    return $left
+}
+
 function Invoke-Cleanup([bool]$Verify) {
     $steps = @($spec.steps)
     [array]::Reverse($steps)
-    foreach ($s in $steps) {
-        $k = $Kinds[[string]$s.kind]
-        if ($k.Clean) {
-            $res = try { (& $k.Clean $s.params 2>&1 | Out-String).Trim() } catch { 'error: ' + $_.Exception.Message }
-            L ('  [' + $s.id + '] ' + ([string]$s.kind).PadRight(18) + ' clean -> ' + $res)
-        }
-        foreach ($f in (Get-StagedFiles $s.params)) {
-            Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
-        }
-    }
+    foreach ($s in $steps) { Remove-StepArtifacts $s }
     if (-not $Verify) { return 0 }
     L ''
     L '--- verification (every line should say GONE) ---'
     $left = 0
-    foreach ($s in $spec.steps) {
-        $k = $Kinds[[string]$s.kind]
-        $checks = @()
-        if ($k.Gone) { $checks += , @(([string]$s.kind), { param($p) & $k.Gone $p }) }
-        foreach ($f in (Get-StagedFiles $s.params)) { $checks += , @(('file ' + $f), [scriptblock]::Create("-not (Test-Path -LiteralPath '$($f -replace "'", "''")')")) }
-        foreach ($c in $checks) {
-            $gone = try { [bool](& $c[1] $s.params) } catch { $false }
-            if (-not $gone) { $left++ }
-            L ('  [' + $s.id + '] ' + $c[0].PadRight(40) + ' : ' + $(if ($gone) { 'GONE' } else { 'STILL PRESENT <<<' }))
-        }
-    }
+    foreach ($s in $spec.steps) { $left += (Measure-StepLeftovers $s) }
     return $left
 }
 
