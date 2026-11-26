@@ -11,7 +11,8 @@ This file is refreshed by ctf_workspace.ps1; put local notes in `CLAUDE.local.md
 - Keep `notes.md` in the challenge folder current (Given / Tried / Found / Next, status, flag) so a teammate can take over.
 - Each category folder has `_cheatsheet.md` (kit sheet plus the matching ctf skill's quick start and when-to-pivot),
   and web / pwn / crypto have a `_*.py` template. All sheets: `cheatsheets\` (start with `00-triage.md`).
-- CTF skills: `.claude\skills\ctf-*`. The full kit: `sec-range-kit\`.
+- CTF skills: `.claude\skills\ctf-*`. The full kit: the path in the last section of `START.md`.
+- `Writeups\<category>_<name>.md` is each challenge's write-up skeleton (`new-challenge.ps1` creates it).
 
 ## Where tools run (follow this; do not install duplicates)
 
@@ -26,5 +27,7 @@ This file is refreshed by ctf_workspace.ps1; put local notes in `CLAUDE.local.md
 ## Rules
 
 - Prefer a script that prints the flag; show the flag and how it was obtained. The user submits flags.
+- When a challenge is solved, fill in its write-up at once: the commands actually run, the full solve script,
+  evidence paths, the flag. Organizers may require write-ups and disqualify teams that cannot show their work.
 - Only interact with the challenge targets. No scanning or attacks against anything else, including the event platform.
 - Burp MCP asks before sending requests; do not ask the user to switch that approval off.

@@ -12,8 +12,9 @@ Every category folder starts with `_cheatsheet.md` (and `_*.py` templates where 
 | [crypto](crypto/_cheatsheet.md) | identify the scheme and the weak parameter | crypto_helpers, z3, SageMath, CyberChef | `_crypto_helpers.py` |
 | [misc](misc/_cheatsheet.md) | CyberChef Magic, `file`, `binwalk` | CyberChef, zbarimg, bkcrack, pwntools for services | - |
 | [forensic](forensic/_cheatsheet.md) | `file`, `exiftool`, `binwalk -e` | Wireshark/tshark, Volatility 3, zsteg, steghide + stegseek, foremost | - |
-| [scenario](scenario/_cheatsheet.md) | read the story, list the artifacts | as forensic, plus the DFIR parsers in `sec-range-kit\rangekit\dfir` | - |
+| [scenario](scenario/_cheatsheet.md) | read the story, list the artifacts | as forensic, plus the DFIR parsers in the kit's `rangekit\dfir` | - |
 
+Solved: fill in `Writeups\<category>_<name>.md` (created with the challenge) at once: real commands, the script, evidence, flag.
 Stuck for 20 minutes: write what you tried in `notes.md`, tell the team, switch.
 
 ## Where each tool runs (one rule, no duplicates)

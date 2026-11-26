@@ -3,10 +3,14 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File ctf_workspace.ps1 -Workspace C:\Users\me\Downloads\Sec
 #
 # Run it from a sec-range-kit checkout, or let it clone one. It creates:
-#   <Workspace>\sec-range-kit\              the kit (cloned, or fast-forwarded when present)
+#   <Workspace>\sec-range-kit\              the kit (cloned, or fast-forwarded when present);
+#                                           -Kit <path> keeps it elsewhere, e.g. one kit shared
+#                                           by several event folders (Sec\tools\sec-range-kit)
 #   <Workspace>\.claude\skills\ctf-*\       the CTF skills, so Claude Code started in <Workspace> loads them
 #   <Workspace>\START.md                    one table: category -> folder, first move, tools, template
 #   <Workspace>\new-challenge.ps1           .\new-challenge.ps1 pwn babyrop -> folder + notes.md + template
+#                                           + Writeups\pwn_babyrop.md (from writeup-template.md)
+#   <Workspace>\Writeups\                   one write-up per challenge (never overwritten)
 #   <Workspace>\kali.ps1                    .\kali.ps1 <command> -> runs it in Kali (WSL2, or -Vm over SSH)
 #   <Workspace>\CLAUDE.md                   layout and tool rules for Claude Code (kit-managed)
 #   <Workspace>\.mcp.json                   Burp MCP for Claude Code (written once, then left alone)
@@ -24,6 +28,7 @@ param(
     [Parameter(Mandatory = $true)][string]$Workspace,
     [string]$RepoUrl = 'https://github.com/Youchenjiang/sec-range-kit.git',
     [string]$Branch = 'main',
+    [string]$Kit,
     [switch]$DryRun
 )
 
@@ -35,7 +40,7 @@ function Invoke-Step([string]$Label, [scriptblock]$Body) {
 }
 
 $Workspace = [IO.Path]::GetFullPath($Workspace)
-$kit = Join-Path $Workspace 'sec-range-kit'
+$kit = if ($Kit) { [IO.Path]::GetFullPath($Kit) } else { Join-Path $Workspace 'sec-range-kit' }
 
 Invoke-Step ('create ' + $Workspace) { New-Item -ItemType Directory -Force -Path $Workspace | Out-Null }
 
@@ -70,10 +75,14 @@ Invoke-Step ('copy ctf-* skills into ' + $skillsDest) {
 $ctf = Join-Path $kit 'rangekit\ctf'
 $sheets = Join-Path $ctf 'cheatsheets'
 Invoke-Step 'copy cheat sheets' { Copy-FolderContent $sheets (Join-Path $Workspace 'cheatsheets') }
-Invoke-Step 'copy START.md, CLAUDE.md, MCP_SETUP.zh-TW.md, new-challenge.ps1 and kali.ps1' {
-    foreach ($f in @('START.md', 'CLAUDE.md', 'MCP_SETUP.zh-TW.md', 'new-challenge.ps1', 'kali.ps1')) {
+Invoke-Step 'copy START.md, CLAUDE.md, MCP_SETUP.zh-TW.md, writeup-template.md, new-challenge.ps1 and kali.ps1' {
+    foreach ($f in @('START.md', 'CLAUDE.md', 'MCP_SETUP.zh-TW.md', 'writeup-template.md', 'new-challenge.ps1', 'kali.ps1')) {
         Copy-Item (Join-Path $ctf ('workspace\' + $f)) $Workspace -Force
     }
+    # where the kit lives, for the people and the Claude Code session in this folder
+    $kitNote = "`r`n## The kit`r`n`r`n``" + $kit + "`` (all cheat sheets, setup scripts, the ``rangekit\dfir`` parsers).`r`n"
+    [IO.File]::AppendAllText((Join-Path $Workspace 'START.md'), $kitNote, (New-Object System.Text.UTF8Encoding($false)))
+    New-Item -ItemType Directory -Force -Path (Join-Path $Workspace 'Writeups') | Out-Null
 }
 
 # Project-scoped MCP servers for Claude Code started in the workspace. Burp's server is
