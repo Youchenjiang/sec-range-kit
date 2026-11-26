@@ -6,16 +6,25 @@
 # exists only to make specific telemetry appear (calc.exe is referenced in command
 # lines but never executed, no existing file is touched, Defender stays on).
 #
-#   run      : reset leftovers (same as -Cleanup), then run every step and write
-#              ground_truth.csv (one row per step: UTC/local start and end, expected
-#              events, observed output), sim_log.txt and window.txt to -OutDir.
-#   -Cleanup : remove every artifact the scenario names, newest first, then verify
-#              each one is gone (cleanup_log.txt). Telemetry settings made by
-#              audit_baseline.ps1 / process_access_check.ps1 are NOT reverted here.
+#   run      : remove what an earlier run of this scenario left (owned.json), refuse
+#              to start if any artifact the scenario names already exists, then run
+#              every step and write ground_truth.csv (one row per step: UTC/local
+#              start and end, expected events, observed output), sim_log.txt and
+#              window.txt to -OutDir.
+#   -Cleanup : remove the artifacts this scenario created (owned.json), newest first,
+#              then verify every artifact it names is gone (cleanup_log.txt); exit 1
+#              if anything is left or cannot be checked. -Force also removes
+#              same-named artifacts the scenario did not create. Telemetry settings
+#              made by audit_baseline.ps1 / process_access_check.ps1 are NOT reverted.
+#
+# Ownership: owned.json in -OutDir records each step that created something, so a
+# name collision with existing guest state is refused, never deleted.
 #
 # Secrets: a local_user step takes its password from the environment variable in
-# params.password_env (set it in the guest before the run), or a random one;
-# failed_logons uses random wrong passwords. No password is written to any output.
+# params.password_env (set it in the guest before the run), or a random one, and
+# creates the account with New-LocalUser so the password never appears on a command
+# line (process-creation telemetry records command lines). failed_logons uses random
+# wrong passwords in process. No password is written to any output.
 #
 # Every native call goes through Invoke-Native: stdin is closed (a prompt gets EOF
 # instead of hanging the vmrun session) and each call has a hard timeout.
@@ -27,7 +36,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$Scenario,
     [string]$OutDir = 'C:\Tools\DFIR\out\scenario',
-    [switch]$Cleanup
+    [switch]$Cleanup,
+    [switch]$Force
 )
 
 $ErrorActionPreference = 'Continue'
@@ -292,47 +302,64 @@ function Remove-StepArtifacts($s) {
     foreach ($f in (Get-StagedFiles $s.params)) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
 }
 
-function Write-GoneLine($s, [string]$What, [bool]$Gone) {
-    L ('  [' + $s.id + '] ' + $What.PadRight(40) + ' : ' + $(if ($Gone) { 'GONE' } else { 'STILL PRESENT <<<' }))
+function Test-StepCreates($s) { [bool]$Kinds[[string]$s.kind].Clean -or @(Get-StagedFiles $s.params).Count -gt 0 }
+
+# ---- ownership record: which steps of this scenario created something ----
+$ownedFile = Join-Path $OutDir ('owned_' + $spec.name + '.json')
+function Get-OwnedIds {
+    if (-not (Test-Path -LiteralPath $ownedFile)) { return @() }
+    @((Get-Content -LiteralPath $ownedFile -Raw | ConvertFrom-Json))
+}
+function Save-OwnedIds([string[]]$Ids) {
+    [IO.File]::WriteAllText($ownedFile, (ConvertTo-Json -InputObject @($Ids) -Compress), $utf8)
 }
 
-# Number of artifacts of one step that are still present.
-function Measure-StepLeftovers($s) {
-    $left = 0
+# State of every artifact one step names: GONE, PRESENT or UNKNOWN (the check failed).
+function Get-StepArtifactStates($s) {
+    $states = @()
     $k = $Kinds[[string]$s.kind]
     if ($k.Gone) {
-        # a check that throws could not confirm the removal: count it as left
-        $gone = try { [bool](& $k.Gone $s.params) } catch { $false }
-        Write-GoneLine $s ([string]$s.kind) $gone
-        if (-not $gone) { $left++ }
+        $state = try { if ([bool](& $k.Gone $s.params)) { 'GONE' } else { 'PRESENT' } } catch { 'UNKNOWN' }
+        $states += , @([string]$s.kind, $state)
     }
     foreach ($f in (Get-StagedFiles $s.params)) {
-        $gone = -not (Test-Path -LiteralPath $f)
-        Write-GoneLine $s ('file ' + $f) $gone
-        if (-not $gone) { $left++ }
+        $states += , @(('file ' + $f), $(if (Test-Path -LiteralPath $f) { 'PRESENT' } else { 'GONE' }))
+    }
+    , $states
+}
+
+# Logs each artifact of the given steps; returns how many are not confirmed gone.
+function Measure-Leftovers($Steps) {
+    $left = 0
+    foreach ($s in $Steps) {
+        foreach ($a in (Get-StepArtifactStates $s)) {
+            $mark = switch ($a[1]) { 'GONE' { 'GONE' } 'PRESENT' { 'STILL PRESENT <<<' } default { 'CHECK FAILED <<<' } }
+            L ('  [' + $s.id + '] ' + $a[0].PadRight(40) + ' : ' + $mark)
+            if ($a[1] -ne 'GONE') { $left++ }
+        }
     }
     return $left
 }
 
-function Invoke-Cleanup([bool]$Verify) {
-    $steps = @($spec.steps)
-    [array]::Reverse($steps)
-    foreach ($s in $steps) { Remove-StepArtifacts $s }
-    if (-not $Verify) { return 0 }
-    L ''
-    L '--- verification (every line should say GONE) ---'
-    $left = 0
-    foreach ($s in $spec.steps) { $left += (Measure-StepLeftovers $s) }
-    return $left
+function Remove-Steps($Steps) {
+    $ordered = @($Steps)
+    [array]::Reverse($ordered)
+    foreach ($s in $ordered) { Remove-StepArtifacts $s }
 }
 
 if ($Cleanup) {
-    L ('=== cleanup: ' + $spec.name + ' ===')
+    $owned = Get-OwnedIds
+    $targets = @($spec.steps | Where-Object { $Force -or ($owned -contains [string]$_.id) })
+    L ('=== cleanup: ' + $spec.name + ' (' + $(if ($Force) { 'forced: every named artifact' } else { 'steps recorded in ' + $ownedFile }) + ') ===')
     L ('local ' + (Get-Date).ToString('yyyy-MM-dd HH:mm:ss K'))
-    $left = Invoke-Cleanup $true
+    Remove-Steps $targets
     L ''
-    L ('DONE cleanup left=' + $left)
-    Write-Host ('DONE cleanup left=' + $left + ' -> read ' + $log)
+    L '--- verification (every line should say GONE) ---'
+    $left = Measure-Leftovers $targets
+    if ($left -eq 0) { Save-OwnedIds @() }
+    L ''
+    L ('DONE cleanup steps=' + $targets.Count + ' left=' + $left)
+    Write-Host ('DONE cleanup steps=' + $targets.Count + ' left=' + $left + ' -> read ' + $log)
     if ($left -gt 0) { exit 1 }
     exit 0
 }
@@ -342,8 +369,19 @@ if ($Cleanup) {
 # ---------------------------------------------------------------------------
 L ('=== scenario: ' + $spec.name + ' ===')
 L ''
-L '--- prologue: reset leftovers so the run starts from a clean baseline ---'
-[void](Invoke-Cleanup $false)
+L '--- prologue: remove what an earlier run of this scenario created ---'
+$owned = @(Get-OwnedIds)
+Remove-Steps @($spec.steps | Where-Object { $owned -contains [string]$_.id })
+L ''
+L '--- collision check: every artifact this scenario names must be absent ---'
+if ((Measure-Leftovers @($spec.steps | Where-Object { Test-StepCreates $_ })) -gt 0) {
+    L ''
+    L 'REFUSED: an artifact above exists but was not created by this scenario (or could not be checked).'
+    L 'Rename it in the scenario, or remove it yourself; -Cleanup -Force removes same-named artifacts.'
+    Write-Host ('REFUSED: name collision with existing guest state -> read ' + $log)
+    exit 2
+}
+Save-OwnedIds @()
 Start-Sleep -Seconds 2
 
 $gt = Join-Path $OutDir 'ground_truth.csv'
@@ -361,6 +399,8 @@ foreach ($s in $spec.steps) {
     L ''
     L ('--- [' + $s.id + '] (' + $s.technique + ') ' + $s.name)
     Write-Host ('STEP ' + ([string]$s.id).PadRight(4) + ' (' + $s.technique + ') ' + $s.name)
+    # recorded BEFORE the step runs, so a step that fails halfway is still cleaned up
+    if (Test-StepCreates $s) { $owned = @(Get-OwnedIds) + [string]$s.id; Save-OwnedIds $owned }
     $note = try { (& $Kinds[[string]$s.kind].Run $s.params 2>&1 | Out-String) } catch { 'THREW: ' + $_.Exception.Message }
     Start-Sleep -Milliseconds 800
     $el = Get-Date
