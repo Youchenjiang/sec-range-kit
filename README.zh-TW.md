@@ -22,6 +22,7 @@ sec-range-kit/
 │   ├── common/      # 共用的路徑安全檢查
 │   ├── dfir/        # 證據解析與查詢（E01、ESE、AD1、auditd）
 │   ├── vm/          # 分析 VM 操作（vmrun guest ops、建置與蒐證腳本）
+│   ├── ctf/         # Jeopardy CTF：工具安裝、速查表、解題範本、賽前檢查清單
 │   ├── collab/      # 團隊多 session 協作通訊
 │   └── mcp/         # MCP bridge 與伺服器註冊表
 ├── skills/      # Agent skills（附上游來源與授權清單）

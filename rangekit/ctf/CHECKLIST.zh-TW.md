@@ -21,7 +21,9 @@
 - [ ] WSL2：先 `wsl --update`；GUI 工具（Ghidra、Burp、Wireshark）在 Windows 主機上開。
 - [ ] VM 裝好後**做一個快照**，壞掉時直接回復。
 - [ ] 抽查工具能跑：`source ~/ctf-venv/bin/activate && python -c "import pwn, Crypto, z3"`、`gdb --version`、`vol -h`、Ghidra 能開。
-- [ ] sec-range-kit 已 clone 到每台電腦，`skills/` 裡有 `ctf-*`。
+- [ ] 解題目錄：`powershell -NoProfile -ExecutionPolicy Bypass -File rangekit\ctf\setup\ctf_workspace.ps1 -Workspace C:\Users\<你>\Downloads\Sec`，完成後目錄裡有 `.claude\skills\ctf-*`、`CLAUDE.md`、`cheatsheets\`、`templates\` 和各題型資料夾。
+- [ ] 在解題目錄啟動 Claude Code（`cd` 到該目錄再執行 `claude`），問它「有哪些 ctf skills」確認有載入。
+- [ ] 用 WSL2 解 pwn 題時，把題目檔複製到 Linux 家目錄再執行（`/mnt/c` 上的檔案權限和速度都不適合）。
 
 ### 分工
 - [ ] 每個題型指定主要負責人：Reverse、Web、Pwn、Crypto、Misc、Forensic、情境題。

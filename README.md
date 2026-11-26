@@ -22,6 +22,7 @@ sec-range-kit/
 │   ├── common/      # Shared path safety checks
 │   ├── dfir/        # Evidence parsers and query helpers (E01, ESE, AD1, auditd)
 │   ├── vm/          # Analysis VM operations (vmrun guest ops, setup and collection scripts)
+│   ├── ctf/         # Jeopardy CTF kit: toolchain setup, cheat sheets, solve templates, checklist
 │   ├── collab/      # Multi-session collaboration bus for team play
 │   └── mcp/         # MCP bridges and the server registry
 ├── skills/      # Agent skills (with upstream source and license manifest)
