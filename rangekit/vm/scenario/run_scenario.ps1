@@ -112,7 +112,13 @@ $runKey = 'HKCU\Software\Microsoft\Windows\CurrentVersion\Run'
 # ---------------------------------------------------------------------------
 $Kinds = @{
     scheduled_task = @{
-        Run   = { param($p) Invoke-Native 'schtasks.exe' @('/create', '/tn', $p.task, '/tr', $p.command, '/sc', 'once', '/st', '23:59', '/f') }
+        # Created DISABLED: Task Scheduler still logs the registration (4698, TaskScheduler/106)
+        # but the command can never fire, even if cleanup does not run before the trigger time.
+        Run   = {
+            param($p)
+            (Invoke-Native 'schtasks.exe' @('/create', '/tn', $p.task, '/tr', $p.command, '/sc', 'once', '/st', '23:59', '/f')) +
+            ' | disable: ' + (Invoke-Native 'schtasks.exe' @('/change', '/tn', $p.task, '/disable'))
+        }
         Clean = { param($p) Invoke-Native 'schtasks.exe' @('/delete', '/tn', $p.task, '/f') 20 }
         Gone  = { param($p) (Invoke-Native 'schtasks.exe' @('/query', '/tn', $p.task) 20) -notmatch '\[exit=0\]' }
     }

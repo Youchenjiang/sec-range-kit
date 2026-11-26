@@ -5,9 +5,9 @@
   "steps": [
     {
       "id": "S01", "kind": "scheduled_task", "technique": "T1053.005",
-      "name": "Scheduled task creation through schtasks.exe",
+      "name": "Scheduled task creation through schtasks.exe (registered disabled, never fires)",
       "params": { "task": "RangeKitDemo", "command": "cmd.exe /c calc.exe" },
-      "expect": { "sysmon": "1 (schtasks.exe); 11 (task file under System32\\Tasks)", "security": "4698", "other": "TaskScheduler/106" }
+      "expect": { "sysmon": "1 (schtasks.exe x2: create, disable); 11 (task file under System32\\Tasks)", "security": "4698; 4700/4701 for the disable", "other": "TaskScheduler/106" }
     },
     {
       "id": "S02", "kind": "service", "technique": "T1543.002",
