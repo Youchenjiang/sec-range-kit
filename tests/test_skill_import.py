@@ -529,6 +529,38 @@ class BlobHashingTests(unittest.TestCase):
         self.assertTrue(si.is_tracked(repo, tracked))
         self.assertFalse(si.is_tracked(repo, untracked))
         self.assertIsNone(si.ignore_rule(repo, untracked))
+        self.assertEqual({"tracked.txt"}, si.tracked_files(repo))
+
+    def test_batched_hashes_match_single_calls_including_crlf(self):
+        repo = make_repo(self.root / "batch", autocrlf="true")
+        files = []
+        for i, body in enumerate([b"a\r\nb\r\n", b"plain\n", b""]):
+            path = repo / "dir with space" / f"n{i}.md"
+            path.parent.mkdir(exist_ok=True)
+            path.write_bytes(body)
+            files.append(path)
+        batched = si.local_blob_shas(repo, files)
+        self.assertEqual({p: si.local_blob_sha(repo, p) for p in files}, batched)
+        self.assertEqual({}, si.local_blob_shas(repo, []))
+
+    def test_batched_blob_reads_match_single_reads(self):
+        repo = make_repo(self.root / "blobs")
+        bodies = [b"one\n", b"two\nlines\n", b"", b"\x00binary\xff"]
+        shas = []
+        for i, body in enumerate(bodies):
+            (repo / f"f{i}").write_bytes(body)
+            shas.append(si.blob_sha1(body))
+        commit_all(repo)
+        si._BLOB_CACHE.clear()
+        self.assertEqual(dict(zip(shas, bodies)), si.read_blobs(repo, shas))
+        self.assertEqual(bodies[1], si.read_blob(repo, shas[1]))
+
+    def test_batched_blob_read_reports_a_missing_object(self):
+        repo = make_repo(self.root / "missing")
+        (repo / "f").write_bytes(b"x\n")
+        commit_all(repo)
+        with self.assertRaises(si.RuleError):
+            si.read_blobs(repo, ["0" * 40])
 
 
 class RealWorkspaceTests(unittest.TestCase):

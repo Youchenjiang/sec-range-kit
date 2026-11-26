@@ -63,7 +63,7 @@ class RuleError(Exception):
 
 
 _GIT_SUBCOMMANDS = {"ls-tree", "cat-file", "rev-parse", "rev-list", "hash-object", "ls-files", "check-ignore"}
-_GIT_FLAGS = {"-r", "-z", "-e", "-v", "--count", "--error-unmatch", "--"}
+_GIT_FLAGS = {"-r", "-z", "-e", "-v", "--count", "--error-unmatch", "--batch", "--stdin-paths", "--"}
 _GIT_REVISION = re.compile(r"^(HEAD|[0-9a-f]{7,40})(\^\{commit\}|\.\.HEAD)?$")
 
 
@@ -130,7 +130,41 @@ def upstream_tree(repo: Path, commit: str) -> dict[str, str]:
     return tree
 
 
+# Blobs are immutable, so contents read once are kept for the rest of the run.
+_BLOB_CACHE: dict[tuple[str, str], bytes] = {}
+
+
+def read_blobs(repo: Path, shas: list[str]) -> dict[str, bytes]:
+    """Contents of many blobs through one ``git cat-file --batch`` process.
+
+    One git process per file made a full check of a large tree take minutes on
+    Windows, where starting a process costs tens of milliseconds.
+    """
+    key = str(repo)
+    todo = sorted({sha for sha in shas if (key, sha) not in _BLOB_CACHE})
+    for sha in todo:
+        if not re.fullmatch(r"[0-9a-f]{40}", sha):
+            raise RuleError(f"not a full blob id: {sha!r}")
+    if todo:
+        out = _git(repo, "cat-file", "--batch", data=("\n".join(todo) + "\n").encode())
+        pos = 0
+        for sha in todo:
+            end = out.index(b"\n", pos)
+            header = out[pos:end].split()
+            if len(header) != 3 or header[1] != b"blob":
+                raise RuleError(f"{repo}: blob {sha} is missing from the snapshot")
+            size = int(header[2])
+            _BLOB_CACHE[(key, sha)] = out[end + 1:end + 1 + size]
+            pos = end + 1 + size + 1
+    return {sha: _BLOB_CACHE[(key, sha)] for sha in shas}
+
+
 def read_blob(repo: Path, sha: str) -> bytes:
+    cached = _BLOB_CACHE.get((str(repo), sha))
+    if cached is not None:
+        return cached
+    if re.fullmatch(r"[0-9a-f]{40}", sha):
+        return read_blobs(repo, [sha])[sha]
     return _git(repo, "cat-file", "blob", sha)
 
 
@@ -160,6 +194,29 @@ def local_blob_sha(repo_root: Path, path: Path) -> str:
     """Blob sha1 of a working-tree file, checkout filters applied (CRLF-safe)."""
     rel = path.relative_to(repo_root).as_posix()
     return _git(repo_root, "hash-object", "--", rel).decode().strip()
+
+
+def local_blob_shas(repo_root: Path, paths: list[Path]) -> dict[Path, str]:
+    """``local_blob_sha`` for many files through one ``git hash-object --stdin-paths``."""
+    if not paths:
+        return {}
+    rels = [path.relative_to(repo_root).as_posix() for path in paths]
+    if any("\n" in rel or "\r" in rel for rel in rels):
+        raise RuleError("file names with line breaks cannot be hashed in a batch")
+    out = _git(repo_root, "hash-object", "--stdin-paths", data=("\n".join(rels) + "\n").encode("utf-8"))
+    shas = out.decode().split()
+    if len(shas) != len(paths):
+        raise RuleError(f"git hash-object returned {len(shas)} ids for {len(paths)} files")
+    return dict(zip(paths, shas))
+
+
+def tracked_files(repo_root: Path) -> set[str]:
+    """Every path in the index, relative to ``repo_root`` with ``/`` separators."""
+    return {
+        rel.decode("utf-8")
+        for rel in _git(repo_root, "ls-files", "-z").split(b"\0")
+        if rel
+    }
 
 
 def is_tracked(repo_root: Path, path: Path) -> bool:
@@ -441,6 +498,7 @@ def _select_frontmatter(
             f"{expected}; the pin or the upstream layout changed"
         )
     skills: dict[str, SkillRef] = {}
+    read_blobs(repo, list(candidates.values()))
     for name, sha in candidates.items():
         frontmatter = parse_frontmatter(read_blob(repo, sha).decode("utf-8", "replace"))
         if _matches(select.get("where", {}), frontmatter):
@@ -547,6 +605,8 @@ def destination_files(plan: SourcePlan) -> dict[str, dict[str, ImportFile]]:
     spec = plan.spec
     normalize = spec.get("normalize") or {}
     entry_name = normalize.get("entry_name", DEFAULT_ENTRY)
+    if plan.repo:
+        read_blobs(plan.repo, [s.files[s.entry] for s in plan.skills.values() if s.entry and s.entry in s.files])
     out: dict[str, dict[str, ImportFile]] = {}
     for skill in plan.skills.values():
         files: dict[str, ImportFile] = {}
@@ -610,12 +670,15 @@ def _check_import_file(
     rel: str,
     want: ImportFile,
     repo_root: Path,
-    allow_untracked: bool,
     path: Path,
+    actual_sha: str,
+    tracked: bool,
 ) -> list[Problem]:
-    """Content and tracking problems for one imported file that exists on disk."""
+    """Content and tracking problems for one imported file that exists on disk.
+
+    ``actual_sha`` and ``tracked`` come from the batched git calls in ``_check_skill_dir``.
+    """
     problems: list[Problem] = []
-    actual_sha = local_blob_sha(repo_root, path)
     if actual_sha != want.blob_sha:
         hint = _changed_hint(plan, want, path)
         problems.append(
@@ -625,7 +688,7 @@ def _check_import_file(
                 f"is {actual_sha[:12]}…{hint}",
             )
         )
-    if not allow_untracked and not is_tracked(repo_root, path):
+    if not tracked:
         reason = ignore_rule(repo_root, path)
         problems.append(
             Problem(
@@ -682,9 +745,14 @@ def _check_skill_dir(
     files: dict[str, ImportFile],
     dest_dir: Path,
     repo_root: Path,
-    allow_untracked: bool,
+    tracked: set[str] | None,
+    shas: dict[Path, str],
 ) -> list[Problem]:
-    """Every problem for one skill directory that exists on disk."""
+    """Every problem for one skill directory that exists on disk.
+
+    ``tracked`` is the index listing, or None when untracked files are allowed;
+    ``shas`` holds the local blob ids of the wanted files that exist.
+    """
     problems: list[Problem] = []
     on_disk = {
         path.relative_to(dest_dir).as_posix(): path
@@ -695,8 +763,10 @@ def _check_skill_dir(
         if rel not in on_disk:
             problems.append(Problem("missing", f"{name}/{rel}"))
             continue
+        path = dest_dir / rel
+        is_in_index = tracked is None or path.relative_to(repo_root).as_posix() in tracked
         problems += _check_import_file(
-            plan, name, rel, want, repo_root, allow_untracked, dest_dir / rel
+            plan, name, rel, want, repo_root, path, shas[path], is_in_index
         )
     for rel in sorted(set(on_disk) - set(files)):
         problems.append(Problem("extra", f"{name}/{rel} is not in the upstream selection"))
@@ -713,19 +783,27 @@ def check_source(
 ) -> list[Problem]:
     problems = check_license_pin(plan)
     wanted = destination_files(plan)
+    tracked = None if allow_untracked else tracked_files(repo_root)
+    shas = local_blob_shas(repo_root, [
+        skills_dir / name / rel
+        for name, files in wanted.items()
+        for rel in sorted(files)
+        if (skills_dir / name / rel).is_file()
+    ])
 
     for name, files in wanted.items():
         dest_dir = skills_dir / name
         if not dest_dir.is_dir():
             problems.append(Problem("missing", f"{name}/ (whole directory)"))
             continue
-        problems += _check_skill_dir(plan, name, files, dest_dir, repo_root, allow_untracked)
+        problems += _check_skill_dir(plan, name, files, dest_dir, repo_root, tracked, shas)
     return problems
 
 
 def check_local_only(plan: SourcePlan, skills_dir: Path, repo_root: Path) -> list[Problem]:
     """No snapshot available: still insist nothing imported is untracked or absent."""
     problems: list[Problem] = []
+    tracked = tracked_files(repo_root)
     for skill in plan.skills.values():
         dest_dir = skills_dir / skill.name
         if not dest_dir.is_dir():
@@ -734,7 +812,7 @@ def check_local_only(plan: SourcePlan, skills_dir: Path, repo_root: Path) -> lis
         if not (dest_dir / DEFAULT_ENTRY).is_file():
             problems.append(Problem("missing", f"{skill.name}/{DEFAULT_ENTRY}"))
         for path in sorted(dest_dir.rglob("*")):
-            if path.is_file() and not is_tracked(repo_root, path):
+            if path.is_file() and path.relative_to(repo_root).as_posix() not in tracked:
                 reason = ignore_rule(repo_root, path)
                 problems.append(
                     Problem(
@@ -899,13 +977,15 @@ def _write_skill_files(
     stats: ApplyStats,
 ) -> None:
     """Write every wanted file whose local blob differs from the expected one."""
+    read_blobs(plan.repo, [want.upstream_sha for want in files.values() if want.content is None])
+    local = local_blob_shas(repo_root, [dest_dir / rel for rel in sorted(files) if (dest_dir / rel).is_file()])
     for rel, want in sorted(files.items()):
         target = dest_dir / rel
         expected = want.content
         if expected is None:
             expected = read_blob(plan.repo, want.upstream_sha)
         target.parent.mkdir(parents=True, exist_ok=True)
-        if target.is_file() and local_blob_sha(repo_root, target) == want.blob_sha:
+        if local.get(target) == want.blob_sha:
             stats.unchanged += 1
             continue
         target.write_bytes(expected)
