@@ -564,7 +564,7 @@ class BlobHashingTests(unittest.TestCase):
         self.assertTrue(si.is_tracked(repo, tracked))
         self.assertFalse(si.is_tracked(repo, untracked))
         self.assertIsNone(si.ignore_rule(repo, untracked))
-        self.assertEqual({"tracked.txt"}, si.tracked_files(repo))
+        self.assertEqual(si.tracked_files(repo), {"tracked.txt"})
 
     def test_batched_hashes_match_single_calls_including_crlf(self):
         repo = make_repo(self.root / "batch", autocrlf="true")
@@ -575,8 +575,8 @@ class BlobHashingTests(unittest.TestCase):
             path.write_bytes(body)
             files.append(path)
         batched = si.local_blob_shas(repo, files)
-        self.assertEqual({p: si.local_blob_sha(repo, p) for p in files}, batched)
-        self.assertEqual({}, si.local_blob_shas(repo, []))
+        self.assertEqual(batched, {p: si.local_blob_sha(repo, p) for p in files})
+        self.assertEqual(si.local_blob_shas(repo, []), {})
 
     def test_batched_blob_reads_match_single_reads(self):
         repo = make_repo(self.root / "blobs")
@@ -587,8 +587,8 @@ class BlobHashingTests(unittest.TestCase):
             shas.append(si.blob_sha1(body))
         commit_all(repo)
         si._BLOB_CACHE.clear()
-        self.assertEqual(dict(zip(shas, bodies)), si.read_blobs(repo, shas))
-        self.assertEqual(bodies[1], si.read_blob(repo, shas[1]))
+        self.assertEqual(si.read_blobs(repo, shas), dict(zip(shas, bodies)))
+        self.assertEqual(si.read_blob(repo, shas[1]), bodies[1])
 
     def test_batched_blob_read_reports_a_missing_object(self):
         repo = make_repo(self.root / "missing")
