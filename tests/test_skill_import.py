@@ -8,6 +8,7 @@ local-only check needs nothing but the repository itself.
 """
 
 import contextlib
+import functools
 import io
 import json
 import shutil
@@ -132,29 +133,25 @@ def rules_for(upstream: Upstream, **overrides) -> dict:
     return base
 
 
-_TEMPLATE: tempfile.TemporaryDirectory | None = None
-_TEMPLATE_COMMIT = ""
-
-
-def _template_root() -> Path:
+@functools.lru_cache(maxsize=1)
+def _template() -> tuple[tempfile.TemporaryDirectory, str]:
     """Build the git repositories behind ``Case`` once per module; each Case copies them.
 
     Every git call costs tens of milliseconds on Windows, and rebuilding the two
-    repositories for each of ~40 tests dominated the run.
+    repositories for each of ~40 tests dominated the run. Returns the directory
+    holding them and the upstream fixture commit.
     """
-    global _TEMPLATE, _TEMPLATE_COMMIT
-    if _TEMPLATE is None:
-        _TEMPLATE = tempfile.TemporaryDirectory()
-        root = Path(_TEMPLATE.name)
-        repo = make_repo(root / "repo")
-        (repo / "skills").mkdir(parents=True)
-        _TEMPLATE_COMMIT = Upstream(root).commit
-    return Path(_TEMPLATE.name)
+    holder = tempfile.TemporaryDirectory()
+    root = Path(holder.name)
+    repo = make_repo(root / "repo")
+    (repo / "skills").mkdir(parents=True)
+    return holder, Upstream(root).commit
 
 
 def tearDownModule() -> None:
-    if _TEMPLATE is not None:
-        _TEMPLATE.cleanup()
+    if _template.cache_info().currsize:
+        _template()[0].cleanup()
+        _template.cache_clear()
 
 
 class _CopiedUpstream:
@@ -170,10 +167,11 @@ class Case:
 
     def __init__(self, tmp: str):
         self.root = Path(tmp)
-        shutil.copytree(_template_root(), self.root, dirs_exist_ok=True)
+        holder, commit = _template()
+        shutil.copytree(holder.name, self.root, dirs_exist_ok=True)
         self.repo = self.root / "repo"
         self.skills = self.repo / "skills"
-        self.upstream = _CopiedUpstream(self.root / "snapshots" / "upstream", _TEMPLATE_COMMIT)
+        self.upstream = _CopiedUpstream(self.root / "snapshots" / "upstream", commit)
         self.rules_path = self.skills / "import-rules.json"
         # the rules hold absolute snapshot paths, so they are written after the copy
         self.rules = rules_for(self.upstream)
