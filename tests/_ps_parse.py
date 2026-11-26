@@ -3,7 +3,9 @@ import shutil
 import subprocess
 from pathlib import Path
 
-HAVE_PWSH = shutil.which("pwsh") is not None
+# full path, resolved once: the child is started by absolute path, never via a PATH lookup
+PWSH = shutil.which("pwsh")
+HAVE_PWSH = PWSH is not None
 
 
 def parse_failures(scripts: list[Path]) -> tuple[int, str]:
@@ -16,8 +18,10 @@ def parse_failures(scripts: list[Path]) -> tuple[int, str]:
         "[System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$t, [ref]$e) | Out-Null; "
         "if ($e) { $bad++; Write-Output ($f + ': ' + $e[0].Message) } }; exit $bad"
     )
+    if PWSH is None:
+        raise RuntimeError("pwsh is not installed")
     res = subprocess.run(
-        ["pwsh", "-NoProfile", "-NonInteractive", "-Command", command],
+        [PWSH, "-NoProfile", "-NonInteractive", "-Command", command],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, check=False,
     )
     return res.returncode, res.stdout + res.stderr
