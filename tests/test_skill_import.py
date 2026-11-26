@@ -8,8 +8,10 @@ local-only check needs nothing but the repository itself.
 """
 
 import contextlib
+import functools
 import io
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -131,16 +133,47 @@ def rules_for(upstream: Upstream, **overrides) -> dict:
     return base
 
 
+@functools.lru_cache(maxsize=1)
+def _template() -> tuple[tempfile.TemporaryDirectory, str]:
+    """Build the git repositories behind ``Case`` once per module; each Case copies them.
+
+    Every git call costs tens of milliseconds on Windows, and rebuilding the two
+    repositories for each of ~40 tests dominated the run. Returns the directory
+    holding them and the upstream fixture commit.
+    """
+    holder = tempfile.TemporaryDirectory()
+    root = Path(holder.name)
+    repo = make_repo(root / "repo")
+    (repo / "skills").mkdir(parents=True)
+    return holder, Upstream(root).commit
+
+
+def tearDownModule() -> None:
+    if _template.cache_info().currsize:
+        _template()[0].cleanup()
+        _template.cache_clear()
+
+
+class _CopiedUpstream:
+    """The template's upstream snapshot at its copied location (same commit)."""
+
+    def __init__(self, path: Path, commit: str):
+        self.path = path
+        self.commit = commit
+
+
 class Case:
     """A temp workspace: one destination repo plus one upstream snapshot."""
 
     def __init__(self, tmp: str):
         self.root = Path(tmp)
-        self.repo = make_repo(self.root / "repo")
+        holder, commit = _template()
+        shutil.copytree(holder.name, self.root, dirs_exist_ok=True)
+        self.repo = self.root / "repo"
         self.skills = self.repo / "skills"
-        self.skills.mkdir(parents=True)
-        self.upstream = Upstream(self.root)
+        self.upstream = _CopiedUpstream(self.root / "snapshots" / "upstream", commit)
         self.rules_path = self.skills / "import-rules.json"
+        # the rules hold absolute snapshot paths, so they are written after the copy
         self.rules = rules_for(self.upstream)
         self.write_rules()
         local = self.skills / "local-skill"
@@ -529,6 +562,38 @@ class BlobHashingTests(unittest.TestCase):
         self.assertTrue(si.is_tracked(repo, tracked))
         self.assertFalse(si.is_tracked(repo, untracked))
         self.assertIsNone(si.ignore_rule(repo, untracked))
+        self.assertEqual(si.tracked_files(repo), {"tracked.txt"})
+
+    def test_batched_hashes_match_single_calls_including_crlf(self):
+        repo = make_repo(self.root / "batch", autocrlf="true")
+        files = []
+        for i, body in enumerate([b"a\r\nb\r\n", b"plain\n", b""]):
+            path = repo / "dir with space" / f"n{i}.md"
+            path.parent.mkdir(exist_ok=True)
+            path.write_bytes(body)
+            files.append(path)
+        batched = si.local_blob_shas(repo, files)
+        self.assertEqual(batched, {p: si.local_blob_sha(repo, p) for p in files})
+        self.assertEqual(si.local_blob_shas(repo, []), {})
+
+    def test_batched_blob_reads_match_single_reads(self):
+        repo = make_repo(self.root / "blobs")
+        bodies = [b"one\n", b"two\nlines\n", b"", b"\x00binary\xff"]
+        shas = []
+        for i, body in enumerate(bodies):
+            (repo / f"f{i}").write_bytes(body)
+            shas.append(si.blob_sha1(body))
+        commit_all(repo)
+        si._BLOB_CACHE.clear()
+        self.assertEqual(si.read_blobs(repo, shas), dict(zip(shas, bodies)))
+        self.assertEqual(si.read_blob(repo, shas[1]), bodies[1])
+
+    def test_batched_blob_read_reports_a_missing_object(self):
+        repo = make_repo(self.root / "missing")
+        (repo / "f").write_bytes(b"x\n")
+        commit_all(repo)
+        with self.assertRaises(si.RuleError):
+            si.read_blobs(repo, ["0" * 40])
 
 
 class RealWorkspaceTests(unittest.TestCase):
