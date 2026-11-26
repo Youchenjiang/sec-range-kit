@@ -1,13 +1,14 @@
 # ctf_windows_gui.ps1 - install the GUI side of a CTF toolchain on the Windows host.
 #
 # The Linux toolchain (ctf_setup.sh) runs in a VM or WSL2; GUI tools work better
-# on the host: Ghidra, Burp Suite, Wireshark, a hex editor, dnSpyEx and CyberChef.
+# on the host: Ghidra, Burp Suite, Wireshark, a hex editor, dnSpyEx, CyberChef,
+# jadx-gui (APK/Java) and bkcrack (zip known plaintext).
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File rangekit\ctf\setup\ctf_windows_gui.ps1 -DryRun
 #   powershell -NoProfile -ExecutionPolicy Bypass -File rangekit\ctf\setup\ctf_windows_gui.ps1
 #
 # winget packages are checked with "winget show" first; an id winget does not
-# know is reported and skipped. Ghidra, dnSpyEx and CyberChef come from the
+# know is reported and skipped. Ghidra, dnSpyEx, CyberChef, jadx and bkcrack come from the
 # latest GitHub release and are unpacked under -Dest. Rerunning skips what exists.
 # ASCII ONLY.
 
@@ -39,7 +40,9 @@ $wingetPackages = [ordered]@{
 $releases = @(
     @('NationalSecurityAgency/ghidra', '^ghidra_.*_PUBLIC_.*\.zip$', 'ghidra'),
     @('dnSpyEx/dnSpy', '^dnSpy-net-win64\.zip$', 'dnSpyEx'),
-    @('gchq/CyberChef', '^CyberChef_.*\.zip$', 'CyberChef')
+    @('gchq/CyberChef', '^CyberChef_.*\.zip$', 'CyberChef'),
+    @('skylot/jadx', '^jadx-gui-.*-with-jre-win\.zip$', 'jadx'),
+    @('kimci86/bkcrack', '^bkcrack-.*-win64\.zip$', 'bkcrack')
 )
 
 # Tools a player may already have, installed some other way: use those, never a second copy.

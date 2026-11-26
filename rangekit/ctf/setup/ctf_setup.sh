@@ -112,6 +112,21 @@ git_tool() { # git_tool <name> <url>: shallow clone or fast-forward under $CTF_T
   run git clone -q --depth 1 "$2" "$dest" || FAILED+=("git:$1")
 }
 
+# build_tool <name> <url> <binary>: clone, build with CMake, link the binary into ~/.local/bin
+build_tool() {
+  local dest="$CTF_TOOLS/$1" bin
+  if [ -x "$HOME/.local/bin/$3" ]; then return 0; fi
+  git_tool "$1" "$2"
+  if [ "$DRY_RUN" = 1 ]; then printf '[dry-run] cmake build %s -> ~/.local/bin/%s
+' "$1" "$3"; return 0; fi
+  if cmake -S "$dest" -B "$dest/build" -DCMAKE_BUILD_TYPE=Release >/dev/null &&
+     cmake --build "$dest/build" -j"$(nproc)" >/dev/null; then
+    bin=$(find "$dest/build" -type f -name "$3" -perm -u+x | head -n 1)
+    if [ -n "$bin" ]; then mkdir -p "$HOME/.local/bin" && ln -sf "$bin" "$HOME/.local/bin/$3" && return 0; fi
+  fi
+  echo "  FAILED: build $1"; FAILED+=("build:$1")
+}
+
 say "environment"
 echo "distribution : $(. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-unknown}")"
 echo "WSL          : $([ "$IS_WSL" = 1 ] && echo yes || echo no)"
@@ -124,7 +139,7 @@ if wants base; then
   run $SUDO apt-get update -q
   apt_install git curl wget ca-certificates build-essential pkg-config \
     python3 python3-pip python3-venv python3-dev ruby ruby-dev \
-    jq unzip p7zip-full file xxd netcat-openbsd socat tmux \
+    cmake jq unzip p7zip-full file xxd netcat-openbsd socat tmux \
     libgmp-dev libmpfr-dev libmpc-dev libssl-dev libffi-dev
   run mkdir -p "$CTF_TOOLS"
   if [ ! -x "$CTF_VENV/bin/python" ]; then run python3 -m venv "$CTF_VENV"; fi
@@ -136,6 +151,10 @@ if wants reverse; then
   say "reverse"
   apt_install gdb gdb-multiarch ltrace strace binutils upx-ucl radare2 patchelf apktool
   pip_install capstone unicorn keystone-engine uncompyle6 lief frida-tools
+  apt_install jadx
+  # PyInstaller exe -> .pyc (pyinstxtractor) -> source (pycdc handles Python 3.9+, uncompyle6 does not)
+  git_tool pyinstxtractor https://github.com/extremecoders-re/pyinstxtractor
+  build_tool pycdc https://github.com/zrax/pycdc pycdc
   if [ "$WITH_HEAVY" = 1 ]; then pip_install angr qiling; fi
 fi
 
@@ -151,6 +170,8 @@ if wants pwn; then
     apt_install ropper
   fi
   gem_install one_gadget seccomp-tools
+  # identify a remote libc from leaked offsets offline (run its ./get once to fill the database)
+  git_tool libc-database https://github.com/niklasb/libc-database
   if [ "$WITH_PWNDBG" = 1 ]; then
     git_tool pwndbg https://github.com/pwndbg/pwndbg
     echo "  pwndbg checked out in $CTF_TOOLS/pwndbg: run its ./setup.sh once to finish"
@@ -176,7 +197,11 @@ fi
 if wants web; then
   say "web"
   apt_install sqlmap ffuf gobuster nmap whatweb
-  pip_install requests httpx beautifulsoup4 flask-unsign pyjwt
+  pip_install requests httpx beautifulsoup4 flask-unsign pyjwt git-dumper
+  git_tool jwt_tool https://github.com/ticarpi/jwt_tool
+  if [ "$DRY_RUN" = 1 ] || [ -f "$CTF_TOOLS/jwt_tool/requirements.txt" ]; then
+    run "$CTF_VENV/bin/pip" install -q -r "$CTF_TOOLS/jwt_tool/requirements.txt" || FAILED+=("pip:jwt_tool-requirements")
+  fi
   if [ "$WITH_WORDLISTS" = 1 ]; then
     apt_install seclists
     if [ ! -d /usr/share/seclists ]; then git_tool SecLists https://github.com/danielmiessler/SecLists; fi
@@ -190,17 +215,28 @@ if wants forensic; then
     pngcheck qpdf poppler-utils sqlite3 imagemagick ffmpeg testdisk pcapfix
   pip_install volatility3 oletools matplotlib
   gem_install zsteg
+  # stegseek cracks steghide passwords; distributions without the package get the release .deb
+  if [ "$DRY_RUN" = 1 ] || apt-cache show stegseek >/dev/null 2>&1; then apt_install stegseek
+  elif ! command -v stegseek >/dev/null 2>&1; then
+    deb="$(mktemp -d)/stegseek.deb"
+    if curl -fsSL -o "$deb" https://github.com/RickdeJager/stegseek/releases/download/v0.6/stegseek_0.6-1.deb &&
+       $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -q "$deb" >/dev/null; then :
+    else echo "  FAILED: stegseek release .deb"; FAILED+=("deb:stegseek"); fi
+  fi
 fi
 
 if wants misc; then
   say "misc"
   apt_install qrencode zbar-tools libzbar0 sox
   pip_install pillow numpy segno dnslib pyzbar
+  build_tool bkcrack https://github.com/kimci86/bkcrack bkcrack   # ZipCrypto known-plaintext attack
 fi
 
 say "done"
 if [ "$DRY_RUN" = 1 ]; then echo "dry run: nothing was changed"; fi
 echo "activate the Python tools : source $CTF_VENV/bin/activate"
+echo "built binaries (pycdc, bkcrack) : ~/.local/bin  (add it to PATH)"
+echo "script tools (pyinstxtractor, jwt_tool, libc-database) : $CTF_TOOLS/<name>"
 echo "Ruby gems are in           : \$(gem env user_gemhome)/bin  (add it to PATH)"
 if [ "$IS_WSL" = 1 ]; then
   echo "WSL2 note: GUI tools (Ghidra, Burp, Wireshark) run better on the Windows host;"
