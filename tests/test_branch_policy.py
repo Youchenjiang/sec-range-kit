@@ -41,6 +41,11 @@ class BranchPolicyTests(unittest.TestCase):
             with self.subTest(branch=branch):
                 self.assertTrue(validate_branch_name(branch))
 
+    def test_event_branches_follow_the_same_naming_rules(self):
+        self.assertEqual([], validate_branch_name("event/2026-hitcon"))
+        self.assertTrue(validate_branch_name("event/hitcon"))
+        self.assertTrue(validate_branch_name("event/2026.1-hitcon"))
+
     def test_preserves_meaningful_names(self):
         for branch in ("fix/issue-180", "feat/oauth-support", "refactor/net-migration",
                        "fix/cve-12345", "refactor/layer-ownership",

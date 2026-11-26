@@ -13,6 +13,8 @@ ALLOWED_PREFIXES = (
     "test",
     "perf",
     "style",
+    # Long-lived per-event branches (event/<year>-<name>); they never open a PR.
+    "event",
 )
 PR_SEQUENCE_PATTERNS = (
     re.compile(r"(?:^|[-_/])pr\d+(?=$|[-_/])", re.IGNORECASE | re.ASCII),

@@ -13,6 +13,7 @@ fi
 push_args=""
 initial_push_flag=""
 bootstrap_push=""
+event_push=""
 remote_url="${2:-}"
 if [ -n "$push_updates" ]; then
   branch_count=0
@@ -64,6 +65,9 @@ if [ -n "$push_updates" ]; then
         fi
         branch_count=$((branch_count + 1))
         push_args="$local_ref $local_oid"
+        case "$local_ref" in
+          refs/heads/event/*) event_push="true" ;;
+        esac
         if [ "$remote_oid" = "0000000000000000000000000000000000000000" ]; then
           initial_push_flag="--initial-push"
         fi
@@ -107,6 +111,8 @@ fi
 is_direct_push=$(git config --bool --get repo.directPush 2>/dev/null || echo "false")
 if [ "$bootstrap_push" = "true" ]; then
   echo "[pre-push] Bootstrap push: no PR exists yet; skipping PR body preflight check."
+elif [ "$event_push" = "true" ]; then
+  echo "[pre-push] Event branch: it never opens a PR; skipping PR body preflight check."
 elif [ "$is_direct_push" != "true" ] && [ "${ALLOW_DIRECT_PUSH:-false}" != "true" ]; then
   BODY_FILE="${PR_BODY_FILE:-${CLICKRA_PR_BODY_FILE:-}}"
   if [ -z "$BODY_FILE" ]; then
