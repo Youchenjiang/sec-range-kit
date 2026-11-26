@@ -16,13 +16,23 @@ Every category folder starts with `_cheatsheet.md` (and `_*.py` templates where 
 
 Stuck for 20 minutes: write what you tried in `notes.md`, tell the team, switch.
 
-## Where things run
+## Where each tool runs (one rule, no duplicates)
 
-- Windows host: Ghidra, dnSpyEx, Burp Suite, Wireshark, HxD, CyberChef (`%USERPROFILE%\ctf-tools`).
-- Linux VM / WSL2: everything else, after `source ~/ctf-venv/bin/activate`.
-  This folder is `/mnt/c/Users/<you>/Downloads/Sec` from WSL2; copy pwn binaries into the Linux home first.
+| Tool | Runs on | How a person uses it | How Claude Code uses it |
+|---|---|---|---|
+| IDA Pro | Windows host (the installed copy) | GUI | IDA MCP (`ida-pro-mcp`), when the plugin is running in IDA |
+| Burp Suite | Windows host (the installed copy) | GUI, proxy 127.0.0.1:8080 | Burp MCP at `http://127.0.0.1:9876/mcp` (asks before sending requests) |
+| Ghidra, dnSpyEx, Wireshark, HxD, CyberChef | Windows host | GUI | not directly: paste the result, or use the Kali CLI equivalent |
+| pwntools, gdb/pwndbg, checksec, ROPgadget, binwalk, volatility, tshark, sqlmap, hashcat, z3, ... | Kali (WSL2 first, VM as backup) | `.\kali.ps1 <command>` | `.\kali.ps1 <command>` from the challenge folder |
+| Python helpers in this folder (`*_helpers.py`, templates) | Kali | `.\kali.ps1 python3 x.py` | same |
+
+- Do not use Kali's copies of Ghidra or Burp; the host has them.
+- `kali.ps1` runs in the Linux path of the current folder with `~/ctf-venv` active. `-Vm` uses the Kali VM over SSH
+  (set `CTF_KALI_SSH=user@host` and `CTF_KALI_SHARE=<workspace path in the VM>`).
+- pwn binaries: copy into the Kali home before running (`/mnt/c` has no exec bits and is slow).
 
 ## With Claude Code
 
-Start it in this folder (`claude`); it reads `CLAUDE.md` and the `ctf-*` skills in `.claude\skills`.
+Start it in this folder (`claude`); it reads `CLAUDE.md`, the `ctf-*` skills in `.claude\skills` and the MCP servers in `.mcp.json`
+(approve them on first use; `claude mcp list` shows what is connected).
 Point it at one challenge folder and ask for a script that prints the flag; run it yourself.

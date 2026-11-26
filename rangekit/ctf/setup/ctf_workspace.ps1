@@ -7,13 +7,16 @@
 #   <Workspace>\.claude\skills\ctf-*\       the CTF skills, so Claude Code started in <Workspace> loads them
 #   <Workspace>\START.md                    one table: category -> folder, first move, tools, template
 #   <Workspace>\new-challenge.ps1           .\new-challenge.ps1 pwn babyrop -> folder + notes.md + template
-#   <Workspace>\CLAUDE.md                   how this folder is laid out, for Claude Code
+#   <Workspace>\kali.ps1                    .\kali.ps1 <command> -> runs it in Kali (WSL2, or -Vm over SSH)
+#   <Workspace>\CLAUDE.md                   layout and tool rules for Claude Code (kit-managed)
+#   <Workspace>\.mcp.json                   Burp MCP for Claude Code (written once, then left alone)
+#   <Workspace>\MCP_SETUP.zh-TW.md          how to connect the IDA Pro and Burp MCP servers
 #   <Workspace>\cheatsheets\                every sheet, including 00-triage.md
-#   <Workspace>\<category>\_cheatsheet.md   the category's sheet (scenario: triage + forensic)
+#   <Workspace>\<category>\_cheatsheet.md   the category's sheet plus the matching ctf skill's quick start
 #   <Workspace>\<category>\_*.py            the category's solve template (web, pwn, crypto)
 # Categories: reverse web pwn crypto misc forensic scenario.
-# Rerunning refreshes the kit, skills, START.md, the helper, sheets and templates;
-# challenge folders and an existing CLAUDE.md are never overwritten.
+# Rerunning refreshes everything the kit manages; challenge folders, .mcp.json and
+# CLAUDE.local.md (put your own notes for Claude Code there) are never overwritten.
 # ASCII ONLY.
 
 [CmdletBinding()]
@@ -67,9 +70,21 @@ Invoke-Step ('copy ctf-* skills into ' + $skillsDest) {
 $ctf = Join-Path $kit 'rangekit\ctf'
 $sheets = Join-Path $ctf 'cheatsheets'
 Invoke-Step 'copy cheat sheets' { Copy-FolderContent $sheets (Join-Path $Workspace 'cheatsheets') }
-Invoke-Step 'copy START.md and new-challenge.ps1' {
-    Copy-Item (Join-Path $ctf 'workspace\START.md') $Workspace -Force
-    Copy-Item (Join-Path $ctf 'workspace\new-challenge.ps1') $Workspace -Force
+Invoke-Step 'copy START.md, CLAUDE.md, MCP_SETUP.zh-TW.md, new-challenge.ps1 and kali.ps1' {
+    foreach ($f in @('START.md', 'CLAUDE.md', 'MCP_SETUP.zh-TW.md', 'new-challenge.ps1', 'kali.ps1')) {
+        Copy-Item (Join-Path $ctf ('workspace\' + $f)) $Workspace -Force
+    }
+}
+
+# Project-scoped MCP servers for Claude Code started in the workspace. Burp's server is
+# local and asks before every request; IDA's comes from the ida-pro-mcp Claude plugin
+# (see MCP_SETUP.zh-TW.md). An existing .mcp.json is left alone.
+$mcpJson = Join-Path $Workspace '.mcp.json'
+if (-not (Test-Path $mcpJson)) {
+    Invoke-Step ('write ' + $mcpJson) {
+        $mcp = '{' + "`n" + '  "mcpServers": {' + "`n" + '    "burp": { "type": "http", "url": "http://127.0.0.1:9876/mcp" }' + "`n" + '  }' + "`n" + '}' + "`n"
+        [IO.File]::WriteAllText($mcpJson, $mcp, (New-Object System.Text.UTF8Encoding($false)))
+    }
 }
 
 # Sections of a ctf-* SKILL.md worth having next to the challenges: how to start, and when to change course.
@@ -123,25 +138,6 @@ foreach ($c in $layout.Keys) {
         [IO.File]::WriteAllText((Join-Path $dir '_cheatsheet.md'), ($parts -join "`r`n`r`n"), (New-Object System.Text.UTF8Encoding($false)))
         $tpl = $layout[$c][1]
         if ($tpl) { Copy-Item (Join-Path $ctf ('templates\' + $tpl)) (Join-Path $dir ('_' + $tpl)) -Force }
-    }
-}
-
-$guide = Join-Path $Workspace 'CLAUDE.md'
-if (-not (Test-Path $guide)) {
-    Invoke-Step ('write ' + $guide) {
-        $text = @(
-            '# CTF solving workspace',
-            '',
-            'Jeopardy CTF in progress. Categories: reverse, web, pwn, crypto, misc, forensic, scenario.',
-            '',
-            '- Start from `START.md`. One folder per challenge: `<category>\<challenge-name>\`, created by `.\new-challenge.ps1 <category> <name>`. Keep the original download untouched; work on copies.',
-            '- Keep `notes.md` in the challenge folder current (Given / Tried / Found / Next, status, flag), so a teammate can take over.',
-            '- Each category folder has `_cheatsheet.md`, and web / pwn / crypto have a `_*.py` template (copied into the challenge folder without the underscore). All sheets: `cheatsheets\` (start with `00-triage.md`).',
-            '- CTF skills are in `.claude\skills\ctf-*`; the full kit is in `sec-range-kit\`.',
-            '- Linux tools live in the VM or WSL2 (`source ~/ctf-venv/bin/activate`). From WSL2 this folder is `/mnt/c/...`; copy pwn binaries into the Linux home before running them.',
-            '- Prefer a script that prints the flag; show the flag and how it was obtained. Never attack anything outside the challenge targets.'
-        )
-        [IO.File]::WriteAllLines($guide, $text, (New-Object System.Text.UTF8Encoding($false)))
     }
 }
 
