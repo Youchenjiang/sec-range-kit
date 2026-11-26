@@ -72,21 +72,54 @@ Invoke-Step 'copy START.md and new-challenge.ps1' {
     Copy-Item (Join-Path $ctf 'workspace\new-challenge.ps1') $Workspace -Force
 }
 
-# category -> sheets (concatenated into _cheatsheet.md) and template (copied as _<name>.py)
+# Sections of a ctf-* SKILL.md worth having next to the challenges: how to start, and when to change course.
+$skillSections = '^## (Quick Start Commands|Quick Wins|First-Pass Workflow|Problem-Solving Workflow|When to Pivot)'
+
+# The start-here and when-to-pivot sections of one skill, plus its bundled scripts, as markdown.
+function Get-SkillDigest([string]$Skill) {
+    $skillDir = Join-Path (Join-Path $kit 'skills') $Skill
+    $entry = Join-Path $skillDir 'SKILL.md'
+    if (-not (Test-Path $entry)) { return '' }
+    $out = New-Object System.Collections.Generic.List[string]
+    $out.Add('---')
+    $out.Add('')
+    $out.Add('# From the ' + $Skill + ' skill')
+    $out.Add('')
+    $out.Add('Extracted from `.claude\skills\' + $Skill + '\SKILL.md` (third-party, licence and source in `sec-range-kit\skills\SOURCES.json`). The full skill and its reference pages are in that folder.')
+    $out.Add('')
+    $keep = $false
+    $inFence = $false
+    foreach ($line in [IO.File]::ReadAllLines($entry)) {
+        if ($line -match '^```') { $inFence = -not $inFence }
+        if (-not $inFence -and $line -match '^## ') { $keep = $line -match $skillSections }
+        if ($keep) { $out.Add($line) }
+    }
+    $scripts = Join-Path $skillDir 'scripts'
+    if (Test-Path $scripts) {
+        $out.Add('')
+        $out.Add('## Ready-made scripts in this skill')
+        $out.Add('')
+        foreach ($s in (Get-ChildItem $scripts -File | Sort-Object Name)) { $out.Add('- `.claude\skills\' + $Skill + '\scripts\' + $s.Name + '`') }
+    }
+    return ($out -join "`r`n")
+}
+
+# category -> sheets (concatenated into _cheatsheet.md), template (copied as _<name>.py), skill digests
 $layout = [ordered]@{
-    reverse  = @(@('reverse.md'), $null)
-    web      = @(@('web.md'), 'web_session.py')
-    pwn      = @(@('pwn.md'), 'pwn_exploit.py')
-    crypto   = @(@('crypto.md'), 'crypto_helpers.py')
-    misc     = @(@('misc.md'), $null)
-    forensic = @(@('forensic.md'), $null)
-    scenario = @(@('00-triage.md', 'forensic.md'), $null)
+    reverse  = @(@('reverse.md'), $null, @('ctf-reverse'))
+    web      = @(@('web.md'), 'web_session.py', @('ctf-web'))
+    pwn      = @(@('pwn.md'), 'pwn_exploit.py', @('ctf-pwn'))
+    crypto   = @(@('crypto.md'), 'crypto_helpers.py', @('ctf-crypto'))
+    misc     = @(@('misc.md'), $null, @('ctf-misc'))
+    forensic = @(@('forensic.md'), $null, @('ctf-forensics'))
+    scenario = @(@('00-triage.md', 'forensic.md'), $null, @('ctf-forensics', 'ctf-osint'))
 }
 foreach ($c in $layout.Keys) {
     $dir = Join-Path $Workspace $c
     Invoke-Step ('prepare ' + $dir) {
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
-        $parts = foreach ($sheet in $layout[$c][0]) { [IO.File]::ReadAllText((Join-Path $sheets $sheet)) }
+        $parts = @(foreach ($sheet in $layout[$c][0]) { [IO.File]::ReadAllText((Join-Path $sheets $sheet)) })
+        $parts += @(foreach ($skill in $layout[$c][2]) { Get-SkillDigest $skill })
         [IO.File]::WriteAllText((Join-Path $dir '_cheatsheet.md'), ($parts -join "`r`n`r`n"), (New-Object System.Text.UTF8Encoding($false)))
         $tpl = $layout[$c][1]
         if ($tpl) { Copy-Item (Join-Path $ctf ('templates\' + $tpl)) (Join-Path $dir ('_' + $tpl)) -Force }
