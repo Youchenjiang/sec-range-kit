@@ -142,7 +142,14 @@ fi
 if wants pwn; then
   say "pwn"
   apt_install gdb gdbserver patchelf qemu-user qemu-user-static binutils-multiarch
-  pip_install pwntools ropgadget ropper
+  pip_install pwntools ropgadget
+  # ropper's filebytes dependency fails to build on some new Pythons (Kali 2026);
+  # fall back to the distribution package before reporting it
+  if [ "$DRY_RUN" = 1 ]; then pip_install ropper
+  elif ! "$CTF_VENV/bin/pip" install -q ropper >/dev/null 2>&1; then
+    echo "  pip ropper failed; trying the distribution package"
+    apt_install ropper
+  fi
   gem_install one_gadget seccomp-tools
   if [ "$WITH_PWNDBG" = 1 ]; then
     git_tool pwndbg https://github.com/pwndbg/pwndbg
