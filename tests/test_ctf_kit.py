@@ -40,6 +40,13 @@ class CtfKitTests(unittest.TestCase):
         text = SETUP_SH.read_text(encoding="utf-8")
         self.assertIsNone(re.search(r"\$SUDO\s+[A-Z_]+=", text))
 
+    def test_pip_install_gets_package_names_only(self) -> None:
+        # pip_install installs each argument on its own, so an option would become a "package"
+        for line in SETUP_SH.read_text(encoding="utf-8").splitlines():
+            if line.strip().startswith("pip_install "):
+                with self.subTest(line=line.strip()):
+                    self.assertNotIn(" -", " " + line.strip()[len("pip_install "):])
+
     @unittest.skipUnless(HAVE_PWSH, "pwsh is required to parse scripts")
     def test_windows_script_parses(self) -> None:
         failures, output = parse_failures(sorted((CTF / "setup").glob("*.ps1")))

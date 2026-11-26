@@ -7,8 +7,11 @@
 #   bash rangekit/ctf/setup/ctf_setup.sh --only pwn,web  # some categories
 #   bash rangekit/ctf/setup/ctf_setup.sh --dry-run       # print, change nothing
 #   bash rangekit/ctf/setup/ctf_setup.sh --with-wordlists --with-pwndbg
+#   bash rangekit/ctf/setup/ctf_setup.sh --with-heavy    # also angr, qiling, fpylll,
+#                                                         # SageMath, PayloadsAllTheThings
 #
 # Categories: base reverse pwn crypto web forensic misc
+# The tool lists follow the Prerequisites of the ctf-* skills in skills/.
 # Python tools go into one virtualenv ($CTF_VENV, default ~/ctf-venv); Ruby gems
 # and git checkouts go under $CTF_TOOLS (default ~/ctf-tools).
 # A package the distribution does not ship is reported and skipped, never fatal;
@@ -21,10 +24,11 @@ CTF_TOOLS="${CTF_TOOLS:-$HOME/ctf-tools}"
 DRY_RUN=0
 WITH_WORDLISTS=0
 WITH_PWNDBG=0
+WITH_HEAVY=0
 ONLY="base,reverse,pwn,crypto,web,forensic,misc"
 FAILED=()
 
-usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -32,6 +36,7 @@ while [ $# -gt 0 ]; do
     --only) shift; ONLY="base,${1:?--only needs a list}" ;;
     --with-wordlists) WITH_WORDLISTS=1 ;;
     --with-pwndbg) WITH_PWNDBG=1 ;;
+    --with-heavy) WITH_HEAVY=1 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -129,14 +134,15 @@ fi
 
 if wants reverse; then
   say "reverse"
-  apt_install gdb gdb-multiarch ltrace strace binutils upx-ucl radare2 patchelf
-  pip_install capstone unicorn keystone-engine
+  apt_install gdb gdb-multiarch ltrace strace binutils upx-ucl radare2 patchelf apktool
+  pip_install capstone unicorn keystone-engine uncompyle6 lief frida-tools
+  if [ "$WITH_HEAVY" = 1 ]; then pip_install angr qiling; fi
 fi
 
 if wants pwn; then
   say "pwn"
-  apt_install gdb gdbserver patchelf qemu-user qemu-user-static
-  pip_install pwntools ropgadget
+  apt_install gdb gdbserver patchelf qemu-user qemu-user-static binutils-multiarch
+  pip_install pwntools ropgadget ropper
   gem_install one_gadget seccomp-tools
   if [ "$WITH_PWNDBG" = 1 ]; then
     git_tool pwndbg https://github.com/pwndbg/pwndbg
@@ -147,31 +153,42 @@ fi
 if wants crypto; then
   say "crypto"
   apt_install hashcat john
-  pip_install pycryptodome gmpy2 sympy z3-solver ecdsa
+  pip_install pycryptodome gmpy2 sympy z3-solver ecdsa py_ecc hashpumpy
+  git_tool RsaCtfTool https://github.com/RsaCtfTool/RsaCtfTool
+  # pip_install takes one package per argument, so a requirements file is installed directly
+  if [ "$DRY_RUN" = 1 ] || [ -f "$CTF_TOOLS/RsaCtfTool/requirements.txt" ]; then
+    run "$CTF_VENV/bin/pip" install -q -r "$CTF_TOOLS/RsaCtfTool/requirements.txt" || FAILED+=("pip:RsaCtfTool-requirements")
+  fi
+  if [ "$WITH_HEAVY" = 1 ]; then
+    apt_install libfplll-dev sagemath
+    pip_install fpylll
+    git_tool crypto-attacks https://github.com/jvdsn/crypto-attacks
+  fi
 fi
 
 if wants web; then
   say "web"
   apt_install sqlmap ffuf gobuster nmap whatweb
-  pip_install requests beautifulsoup4 flask-unsign pyjwt
+  pip_install requests httpx beautifulsoup4 flask-unsign pyjwt
   if [ "$WITH_WORDLISTS" = 1 ]; then
     apt_install seclists
     if [ ! -d /usr/share/seclists ]; then git_tool SecLists https://github.com/danielmiessler/SecLists; fi
   fi
+  if [ "$WITH_HEAVY" = 1 ]; then git_tool PayloadsAllTheThings https://github.com/swisskyrepo/PayloadsAllTheThings; fi
 fi
 
 if wants forensic; then
   say "forensic"
   apt_install binwalk foremost libimage-exiftool-perl steghide tshark sleuthkit \
-    pngcheck qpdf poppler-utils sqlite3 imagemagick
-  pip_install volatility3 oletools
+    pngcheck qpdf poppler-utils sqlite3 imagemagick ffmpeg testdisk pcapfix
+  pip_install volatility3 oletools matplotlib
   gem_install zsteg
 fi
 
 if wants misc; then
   say "misc"
-  apt_install qrencode zbar-tools sox
-  pip_install pillow numpy
+  apt_install qrencode zbar-tools libzbar0 sox
+  pip_install pillow numpy segno dnslib pyzbar
 fi
 
 say "done"
