@@ -67,12 +67,16 @@ A scenario file lists benign, reversible steps that make specific telemetry appe
 | File | Purpose |
 |---|---|
 | `scenario.example.json` | Example scenario: 14 steps from scheduled task to WMI subscription, each with its ATT&CK technique and expected Sysmon / Security / other events |
-| `run_scenario.ps1` | Guest runner. Resets leftovers, runs each step, writes `ground_truth.csv`, `sim_log.txt` and `window.txt`; `-Cleanup` removes every artifact newest first and verifies each is gone |
-| `process_access_check.ps1` | Adds one Sysmon ProcessAccess rule for `-TargetImage`, reloads Sysmon, opens handles with each `-Access` mask and saves the EID 10 events; `-Revert` reloads the baseline config |
+| `run_scenario.ps1` | Guest runner. Removes what an earlier run of the same scenario created, refuses to start (exit 2) if any named artifact already exists, runs each step and writes `ground_truth.csv`, `sim_log.txt` and `window.txt`; `-Cleanup` removes what the scenario created, newest first, and exits 1 unless every artifact is confirmed gone |
+| `process_access_check.ps1` | Adds one Sysmon ProcessAccess rule for `-TargetImage`, reloads Sysmon, opens handles with each `-Access` mask and saves only the EID 10 events of that probe; exits 1 if Sysmon rejects a config (restoring the baseline), 3 if no probe event was recorded; `-Revert` reloads the baseline config |
 
 Step kinds: `scheduled_task`, `service`, `run_key`, `local_user`, `group_add`, `failed_logons`, `encoded_powershell`, `certutil_decode`, `ads`, `lolbin_egress`, `discovery`, `eicar`, `process_open`, `wmi_subscription`. Cleanup is derived from the same names, so what a step creates is exactly what `-Cleanup` removes.
 
-No secret goes in the file: a `local_user` step reads its password from the guest environment variable named in `password_env` (or uses a random one), and `failed_logons` generates its wrong passwords at run time.
+Ownership: the runner records in `owned_<scenario>.json` (in `-OutDir`) every step that created something, before the step runs. Reset and `-Cleanup` only remove those, so a name that collides with existing guest state is refused, never deleted; `-Cleanup -Force` also removes same-named artifacts the scenario did not create. A check that cannot run (a failed or timed-out query) counts as not removed.
+
+Side effects are kept inert: a `scheduled_task` is registered and then disabled, so it logs its creation but never fires; `calc.exe` is only referenced.
+
+No secret goes in the file or on a command line: a `local_user` step reads its password from the guest environment variable named in `password_env` (or uses a random one) and creates the account with `New-LocalUser` in process, so process-creation telemetry never records it; `failed_logons` generates its wrong passwords at run time.
 
 ```bash
 python -m rangekit.vm.scenario validate my-event.json     # names, kinds, params, no stray keys
