@@ -4,14 +4,17 @@ import copy
 import io
 import json
 import re
-import shutil
-import subprocess
+import sys
 import time
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from rangekit.vm import scenario as sc
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _ps_parse import HAVE_PWSH, parse_failures  # noqa: E402
+from rangekit.vm import scenario as sc  # noqa: E402
 
 SCENARIO_DIR = Path(__file__).resolve().parents[1] / "rangekit" / "vm" / "scenario"
 EXAMPLE = SCENARIO_DIR / "scenario.example.json"
@@ -127,19 +130,10 @@ class GuestScriptTests(unittest.TestCase):
                 self.assertIn("[CmdletBinding()]", text)
                 self.assertIsNone(EVENT_MARKERS.search(text))
 
-    @unittest.skipUnless(shutil.which("pwsh"), "pwsh is required to parse scripts")
+    @unittest.skipUnless(HAVE_PWSH, "pwsh is required to parse scripts")
     def test_scripts_parse(self) -> None:
-        paths = ", ".join("'" + str(p).replace("'", "''") + "'" for p in SCRIPTS)
-        command = (
-            f"$bad = 0; foreach ($f in @({paths})) {{ $t = $null; $e = $null; "
-            "[System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$t, [ref]$e) | Out-Null; "
-            "if ($e) { $bad++; Write-Output ($f + ': ' + $e[0].Message) } }; exit $bad"
-        )
-        res = subprocess.run(
-            ["pwsh", "-NoProfile", "-NonInteractive", "-Command", command],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, check=False,
-        )
-        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        failures, output = parse_failures(SCRIPTS)
+        self.assertEqual(failures, 0, output)
 
 
 if __name__ == "__main__":
