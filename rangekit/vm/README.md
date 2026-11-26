@@ -58,8 +58,33 @@ python -m rangekit.vm.vmrun_guest put rangekit/vm/collect/audit_baseline.ps1 'C:
 python -m rangekit.vm.vmrun_guest exec "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Windows\Temp\audit_baseline.ps1 -OutDir C:\Tools\DFIR\out\baseline"
 ```
 
-Revert `audit_baseline.ps1` with `auditpol /restore /file:<OutDir>\auditpol_backup.csv`. `tests/test_vm_collect.py` keeps these scripts ASCII, CRLF, parameterised, parseable and free of event-specific names.
+Revert `audit_baseline.ps1` with `auditpol /restore /file:<OutDir>\auditpol_backup.csv`. `tests/test_vm_collect.py` keeps these scripts ASCII, parameterised, parseable and free of event-specific names.
+
+## Known-answer scenarios (`scenario/`)
+
+A scenario file lists benign, reversible steps that make specific telemetry appear, so a detection exercise has an answer key. `scenario.example.json` covers every step kind with neutral names; each event keeps its own scenario file next to its other material.
+
+| File | Purpose |
+|---|---|
+| `scenario.example.json` | Example scenario: 14 steps from scheduled task to WMI subscription, each with its ATT&CK technique and expected Sysmon / Security / other events |
+| `run_scenario.ps1` | Guest runner. Resets leftovers, runs each step, writes `ground_truth.csv`, `sim_log.txt` and `window.txt`; `-Cleanup` removes every artifact newest first and verifies each is gone |
+| `process_access_check.ps1` | Adds one Sysmon ProcessAccess rule for `-TargetImage`, reloads Sysmon, opens handles with each `-Access` mask and saves the EID 10 events; `-Revert` reloads the baseline config |
+
+Step kinds: `scheduled_task`, `service`, `run_key`, `local_user`, `group_add`, `failed_logons`, `encoded_powershell`, `certutil_decode`, `ads`, `lolbin_egress`, `discovery`, `eicar`, `process_open`, `wmi_subscription`. Cleanup is derived from the same names, so what a step creates is exactly what `-Cleanup` removes.
+
+No secret goes in the file: a `local_user` step reads its password from the guest environment variable named in `password_env` (or uses a random one), and `failed_logons` generates its wrong passwords at run time.
+
+```bash
+python -m rangekit.vm.scenario validate my-event.json     # names, kinds, params, no stray keys
+python -m rangekit.vm.scenario plan my-event.json         # what -Cleanup will remove
+python -m rangekit.vm.vmrun_guest put my-event.json 'C:\Windows\Temp\scenario.json'
+python -m rangekit.vm.vmrun_guest put rangekit/vm/scenario/run_scenario.ps1 'C:\Windows\Temp\run_scenario.ps1'
+python -m rangekit.vm.vmrun_guest exec "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Windows\Temp\run_scenario.ps1 -Scenario C:\Windows\Temp\scenario.json"
+python -m rangekit.vm.vmrun_guest exec "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Windows\Temp\run_scenario.ps1 -Scenario C:\Windows\Temp\scenario.json -Cleanup"
+```
+
+Run `audit_baseline.ps1` first so the expected Security events are actually written. `tests/test_vm_scenario.py` checks the validator, that the runner implements exactly the validated kinds, and that the example stays valid and generic.
 
 ## Origin
 
-Ported from `security/tools/` in [sec-compendium](https://github.com/Youchenjiang/sec-compendium). The `collect/` scripts are generalised from the 2026 HITCON practice scripts; the scenario-specific parts (attack simulation, artifact staging, deliverables) are being turned into templates driven by per-event config.
+Ported from `security/tools/` in [sec-compendium](https://github.com/Youchenjiang/sec-compendium). The `collect/` and `scenario/` scripts are generalised from the 2026 HITCON practice scripts; artifact staging and deliverables are still being turned into templates driven by per-event config.
