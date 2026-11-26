@@ -15,13 +15,12 @@ class CollectScriptTests(unittest.TestCase):
     def test_scripts_exist(self) -> None:
         self.assertGreaterEqual(len(SCRIPTS), 7)
 
-    def test_ascii_only_with_crlf(self) -> None:
-        # PowerShell 5.1 reads a BOM-less .ps1 in the ANSI code page.
+    def test_ascii_only(self) -> None:
+        # PowerShell 5.1 reads a BOM-less .ps1 in the ANSI code page. Line endings
+        # are not checked: the index stores LF and only Windows checkouts get CRLF.
         for path in SCRIPTS:
-            raw = path.read_bytes()
             with self.subTest(script=path.name):
-                self.assertTrue(raw.isascii())
-                self.assertEqual(raw.count(b"\n"), raw.count(b"\r\n"))
+                self.assertTrue(path.read_bytes().isascii())
 
     def test_parameterised(self) -> None:
         for path in SCRIPTS:
