@@ -157,20 +157,23 @@ def validate(data: object) -> list[str]:
 
 
 def _check_group_targets(steps: list) -> list[str]:
-    """group_add may only touch an account the scenario itself creates (and removes)."""
-    def users_of(kind: str) -> list[tuple[object, object]]:
-        return [
-            (step.get("id"), (step.get("params") or {}).get("user"))
-            for step in steps
-            if isinstance(step, dict) and step.get("kind") == kind and isinstance(step.get("params"), dict)
-        ]
+    """group_add may only touch an account an EARLIER local_user step creates (and removes).
 
-    created = {user for _, user in users_of("local_user")}
-    return [
-        f"step {sid}: group_add user {user!r} is not created by a local_user step"
-        for sid, user in users_of("group_add")
-        if user not in created
-    ]
+    The runner executes steps in file order, so an account created later would not
+    exist yet when the group change runs.
+    """
+    problems: list[str] = []
+    created: set[object] = set()
+    for step in steps:
+        if not (isinstance(step, dict) and isinstance(step.get("params"), dict)):
+            continue
+        user = step["params"].get("user")
+        if step.get("kind") == "local_user":
+            created.add(user)
+        elif step.get("kind") == "group_add" and user not in created:
+            problems.append(
+                f"step {step.get('id')}: group_add user {user!r} is not created by an earlier local_user step")
+    return problems
 
 
 def cleanup_plan(data: dict) -> list[str]:

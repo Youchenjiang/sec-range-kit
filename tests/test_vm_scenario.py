@@ -97,6 +97,11 @@ class RejectionTests(unittest.TestCase):
     def test_group_add_needs_an_account_created_by_the_scenario(self) -> None:
         self.assert_rejected(lambda d: d["steps"][4]["params"].update(user="Administrator"), "not created")
 
+    def test_group_add_must_come_after_the_account_is_created(self) -> None:
+        def swap(d):
+            d["steps"][3], d["steps"][4] = d["steps"][4], d["steps"][3]
+        self.assert_rejected(swap, "earlier local_user step")
+
     def test_plain_http_and_bad_stage_dir(self) -> None:
         self.assert_rejected(lambda d: d["steps"][9]["params"].update(url="http://example.com"), "https")
         self.assert_rejected(lambda d: d.update(stage_dir="C:\\Windows\\..\\Temp"), "stage_dir")
