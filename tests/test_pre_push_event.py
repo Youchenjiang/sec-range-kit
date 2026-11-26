@@ -11,9 +11,16 @@ HOOK = ROOT / "scripts" / "hooks" / "pre-push"
 LINT = ROOT / "tools" / "lint_commits.py"
 
 
+# repository-location variables a hook may export; the fixtures build their own repositories
+GIT_LOCATION_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+                     "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR")
+# a stand-in for tools/build_runner.py that records what the hook's test step would see
+ENV_PROBE = 'import os, pathlib\npathlib.Path("gitdir_seen.txt").write_text(os.environ.get("GIT_DIR", ""))\n'
+
+
 def git(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
     env = {k: v for k, v in os.environ.items()
-           if k not in ("ALLOW_DIRECT_PUSH", "PR_BODY_FILE", "CLICKRA_PR_BODY_FILE")}
+           if k not in ("ALLOW_DIRECT_PUSH", "PR_BODY_FILE", "CLICKRA_PR_BODY_FILE", *GIT_LOCATION_VARS)}
     return subprocess.run(
         ["git", "-c", "user.name=Test", "-c", "user.email=test@example.local",
          "-c", "init.defaultBranch=main", *args],
@@ -60,6 +67,19 @@ class EventBranchPushTests(unittest.TestCase):
         res = self.push_branch("feat/event-notes")
         self.assertNotEqual(0, res.returncode)
         self.assertIn("PR_BODY_FILE", res.stderr)
+
+    def test_push_from_a_linked_worktree_hides_git_dir_from_the_test_step(self) -> None:
+        # git runs a hook in a linked worktree with an absolute GIT_DIR; a test that
+        # then ran "git init" or "git config" in its own temp dir rewrote the real repo
+        (self.work / "tools" / "build_runner.py").write_text(ENV_PROBE, encoding="utf-8")
+        git(self.work, "add", "-A")
+        git(self.work, "commit", "-m", "test: add the environment probe")
+        linked = self.tmp / "linked"
+        git(self.work, "worktree", "add", "-b", "event/2026-linked", str(linked))
+        res = git(linked, "push", "origin", "refs/heads/event/2026-linked:refs/heads/event/2026-linked",
+                  check=False)
+        self.assertEqual(0, res.returncode, res.stderr)
+        self.assertEqual("", (linked / "gitdir_seen.txt").read_text())
 
 
 if __name__ == "__main__":
