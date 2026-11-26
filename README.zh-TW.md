@@ -21,7 +21,7 @@ sec-range-kit/
 ├── rangekit/        # Python 套件（pip install -e ".[dfir]"）
 │   ├── common/      # 共用的路徑安全檢查
 │   ├── dfir/        # 證據解析與查詢（E01、ESE、AD1、auditd）
-│   ├── vm/          # 分析 VM 操作（vmrun guest ops、建置／清理腳本）
+│   ├── vm/          # 分析 VM 操作（vmrun guest ops、建置與蒐證腳本）
 │   ├── collab/      # 團隊多 session 協作通訊
 │   └── mcp/         # MCP bridge 與伺服器註冊表
 ├── skills/      # Agent skills（附上游來源與授權清單）
