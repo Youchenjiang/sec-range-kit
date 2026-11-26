@@ -12,6 +12,9 @@
 #
 #   -Revert : reload Sysmon from -BaselineConfig and stop.
 #
+# Exit codes: 0 done; 1 setup or Sysmon reload failed (a failed patch reload is
+# followed by a baseline reload attempt).
+#
 # ASCII ONLY.
 
 [CmdletBinding()]
@@ -40,13 +43,22 @@ if (-not $SysmonExe) {
 if (-not $SysmonExe -or -not (Test-Path $SysmonExe)) { L ('ERROR: Sysmon64.exe not found under ' + $ToolRoot); Write-Host 'ERROR Sysmon64.exe not found'; exit 1 }
 if (-not (Test-Path $BaselineConfig)) { L ('ERROR: baseline config missing: ' + $BaselineConfig + ' (run audit_baseline.ps1 first)'); Write-Host 'ERROR baseline config missing'; exit 1 }
 
+# Returns $true only when Sysmon accepted the configuration (exit code 0).
 function Invoke-SysmonConfig([string]$Config) {
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $rc = & $SysmonExe -c $Config 2>&1 | Out-String
+    $code = $LASTEXITCODE
     $sw.Stop()
-    L ('  Sysmon64 -c exit=' + $LASTEXITCODE + ' elapsed=' + [math]::Round($sw.Elapsed.TotalSeconds, 1) + 's config=' + $Config)
+    L ('  Sysmon64 -c exit=' + $code + ' elapsed=' + [math]::Round($sw.Elapsed.TotalSeconds, 1) + 's config=' + $Config)
     foreach ($line in ($rc -split "`n")) { if ($line.Trim()) { L ('  | ' + $line.Trim()) } }
     foreach ($s in (Get-Service -Name 'Sysmon*' -ErrorAction SilentlyContinue)) { L ('  service ' + $s.Name + ' = ' + $s.Status) }
+    return ($code -eq 0)
+}
+
+function Stop-WithError([string]$Message) {
+    L ('ERROR: ' + $Message)
+    Write-Host ('ERROR ' + $Message + ' -> ' + $log)
+    exit 1
 }
 
 $t0 = Get-Date
@@ -56,7 +68,7 @@ L ('local ' + $t0.ToString('yyyy-MM-dd HH:mm:ss K') + ' | utc ' + $t0.ToUniversa
 if ($Revert) {
     L ''
     L '--- revert: reload the baseline config ---'
-    Invoke-SysmonConfig $BaselineConfig
+    if (-not (Invoke-SysmonConfig $BaselineConfig)) { Stop-WithError 'Sysmon rejected the baseline config; the patched config may still be active' }
     L 'DONE revert'
     Write-Host ('DONE revert -> ' + $log)
     exit 0
@@ -81,7 +93,11 @@ L ('  include rule count now = ' + $ruleCount + '  (baseline bytes ' + $raw.Leng
 # ---- 2. reload Sysmon ----
 L ''
 L '--- 2. reload Sysmon with the patched config ---'
-Invoke-SysmonConfig $patchedPath
+if (-not (Invoke-SysmonConfig $patchedPath)) {
+    L '  patch rejected; reloading the baseline config so Sysmon is left in a known state'
+    $restored = Invoke-SysmonConfig $BaselineConfig
+    Stop-WithError ('Sysmon rejected the patched config; probe not run; baseline reload ' + $(if ($restored) { 'succeeded' } else { 'FAILED' }))
+}
 Start-Sleep -Seconds 2
 
 # ---- 3. open handles to the target ----
